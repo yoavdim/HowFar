@@ -1,0 +1,308 @@
+:root {
+    --bg-color: #0F172A;
+    --card-bg: rgba(30, 41, 59, 0.7);
+    --card-border: rgba(255, 255, 255, 0.1);
+    --text-primary: #F8FAFC;
+    --text-secondary: #94A3B8;
+    --accent-color: #38BDF8;
+    --success-color: #10B981;
+    --danger-color: #EF4444;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-color);
+    background-image: 
+        radial-gradient(circle at 15% 50%, rgba(56, 189, 248, 0.08), transparent 25%),
+        radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.05), transparent 25%);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding-bottom: 2rem;
+    -webkit-font-smoothing: antialiased;
+}
+
+.app-container {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 1.5rem;
+}
+
+/* Glassmorphism utilities */
+.glass-card {
+    background: var(--card-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--card-border);
+    border-radius: 20px;
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+}
+
+/* Header */
+.weather-header {
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 200px;
+    position: relative;
+    gap: 0.5rem;
+}
+
+.weather-header::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.9) 0%, rgba(15, 23, 42, 0.6) 55%, rgba(15, 23, 42, 0.2) 100%);
+    z-index: 1;
+    pointer-events: none;
+}
+
+.weather-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    position: relative;
+    z-index: 2;
+}
+
+.weather-location {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.weather-desc {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    opacity: 0.9;
+    font-weight: 400;
+}
+
+.weather-temp {
+    font-size: 2.5rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.weather-temp i {
+    font-size: 2rem;
+    color: var(--accent-color);
+}
+
+.mini-map {
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    overflow: hidden;
+    border: 1px solid var(--card-border);
+    background: #1E293B;
+    z-index: 0;
+}
+
+.mini-map .leaflet-container {
+    background: #1E293B;
+}
+
+.mini-map .leaflet-control-attribution {
+    font-size: 7px;
+    padding: 0 3px;
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text-secondary);
+}
+
+.mini-map .leaflet-control-attribution a {
+    color: var(--text-secondary);
+}
+
+@media (max-width: 420px) {
+    .weather-temp { font-size: 2rem; }
+    .weather-temp i { font-size: 1.6rem; }
+    .weather-header { min-height: 170px; }
+}
+
+.user-pin {
+    width: 26px;
+    height: 26px;
+    background: var(--accent-color);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #0F172A;
+    font-size: 0.9rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+/* Location Status */
+.location-status {
+    text-align: center;
+    color: var(--accent-color);
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
+.location-status.success {
+    color: var(--success-color);
+    animation: none;
+}
+
+.location-status.error {
+    color: var(--danger-color);
+    animation: none;
+}
+
+/* Facilities List */
+.facilities-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.facility-card {
+    display: flex;
+    align-items: center;
+    padding: 1.25rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    color: inherit;
+    position: relative;
+    overflow: hidden;
+}
+
+.facility-card:hover, .facility-card:active {
+    transform: translateY(-2px) scale(1.01);
+    background: rgba(45, 55, 72, 0.8);
+    box-shadow: 0 15px 35px -10px rgba(0, 0, 0, 0.6);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.facility-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.05);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    margin-right: 1.25rem;
+    color: var(--accent-color);
+    flex-shrink: 0;
+}
+
+.facility-details {
+    flex-grow: 1;
+    min-width: 0; /* Allows text truncation in flex child */
+    padding-right: 0.5rem;
+}
+
+.facility-name, .facility-meta, .facility-status {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.facility-name {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.facility-meta {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.facility-status {
+    font-size: 0.8rem;
+    color: var(--success-color);
+    font-weight: 600;
+    margin-top: 0.15rem;
+}
+
+.facility-distance {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.25rem;
+    flex-shrink: 0; /* Prevents distance from squishing */
+}
+
+.distance-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.direction-compass {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.compass-arrow {
+    display: inline-block;
+    transition: transform 0.3s ease;
+}
+
+/* Skeleton Loading State */
+.skeleton {
+    background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 8px;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.skeleton-text {
+    height: 16px;
+    width: 100%;
+    margin-bottom: 0.5rem;
+}
+.skeleton-text.short { width: 60%; }
+
+/* Mobile Optimizations */
+@media (max-width: 600px) {
+    .app-container { padding: 1rem 0.75rem; }
+    .weather-header { padding: 1.25rem; min-height: 180px; }
+    .weather-temp { font-size: 2rem; }
+    .weather-temp i { font-size: 1.5rem; }
+    .facility-card { padding: 1rem; }
+    .facility-icon { width: 40px; height: 40px; font-size: 1.1rem; margin-right: 1rem; }
+    .facility-name { font-size: 0.95rem; }
+    .facility-meta, .facility-status { font-size: 0.75rem; }
+    .distance-value { font-size: 1.1rem; }
+    .direction-compass { font-size: 0.75rem; }
+}

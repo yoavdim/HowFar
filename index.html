@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HowFar | Toronto Facilities</title>
+    <meta name="description" content="Find the nearest public facilities in Toronto instantly.">
+    <meta name="theme-color" content="#0F172A">
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Leaflet for the mini map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header: Weather -->
+        <header class="weather-header glass-card">
+            <div class="weather-info">
+                <div class="weather-location">
+                    <span class="weather-loc-text">Downtown Toronto</span>
+                    <p id="weather-desc" class="weather-desc">Loading weather...</p>
+                </div>
+                <div class="weather-temp">
+                    <span id="temp-value">--</span>°C
+                    <i id="weather-icon" class="fa-solid fa-cloud"></i>
+                </div>
+            </div>
+            <div class="mini-map" id="mini-map"></div>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <div class="location-status" id="location-status">
+                <i class="fa-solid fa-location-dot"></i> Finding your location...
+            </div>
+            
+            <div class="facilities-list" id="facilities-list">
+                <!-- Cards will be injected here by JavaScript -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Custom JS -->
+    <script src="app.js"></script>
+</body>
+</html>
