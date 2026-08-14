@@ -1,29 +1,29 @@
 // Utility functions for geo calculations
 function getDistance(lat1, lon1, lat2, lon2) {
     const R = 6371e3; // Earth radius in metres
-    const phi1 = lat1 * Math.PI/180;
-    const phi2 = lat2 * Math.PI/180;
-    const delta_phi = (lat2-lat1) * Math.PI/180;
-    const delta_lambda = (lon2-lon1) * Math.PI/180;
+    const phi1 = lat1 * Math.PI / 180;
+    const phi2 = lat2 * Math.PI / 180;
+    const delta_phi = (lat2 - lat1) * Math.PI / 180;
+    const delta_lambda = (lon2 - lon1) * Math.PI / 180;
 
-    const a = Math.sin(delta_phi/2) * Math.sin(delta_phi/2) +
-              Math.cos(phi1) * Math.cos(phi2) *
-              Math.sin(delta_lambda/2) * Math.sin(delta_lambda/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a = Math.sin(delta_phi / 2) * Math.sin(delta_phi / 2) +
+        Math.cos(phi1) * Math.cos(phi2) *
+        Math.sin(delta_lambda / 2) * Math.sin(delta_lambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return R * c; // returns distance in metres
 }
 
 function getBearing(lat1, lon1, lat2, lon2) {
-    const phi1 = lat1 * Math.PI/180;
-    const phi2 = lat2 * Math.PI/180;
-    const lambda1 = lon1 * Math.PI/180;
-    const lambda2 = lon2 * Math.PI/180;
-    
-    const y = Math.sin(lambda2-lambda1) * Math.cos(phi2);
-    const x = Math.cos(phi1)*Math.sin(phi2) - Math.sin(phi1)*Math.cos(phi2)*Math.cos(lambda2-lambda1);
+    const phi1 = lat1 * Math.PI / 180;
+    const phi2 = lat2 * Math.PI / 180;
+    const lambda1 = lon1 * Math.PI / 180;
+    const lambda2 = lon2 * Math.PI / 180;
+
+    const y = Math.sin(lambda2 - lambda1) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(lambda2 - lambda1);
     const theta = Math.atan2(y, x);
-    return (theta*180/Math.PI + 360) % 360; // in degrees from north
+    return (theta * 180 / Math.PI + 360) % 360; // in degrees from north
 }
 
 function formatDistance(meters) {
@@ -72,7 +72,7 @@ function initMiniMap() {
 document.addEventListener('DOMContentLoaded', () => {
     initWeather();
     renderSkeletonCards();
-    
+
     if ("geolocation" in navigator) {
         const timeoutId = setTimeout(() => {
             updateLocationStatus("Location request timed out. Please try again.", "error");
@@ -113,14 +113,14 @@ async function initWeather() {
         // Fetch weather for Downtown Toronto
         const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=43.6532&longitude=-79.3832&current_weather=true');
         const data = await res.json();
-        
+
         document.getElementById('temp-value').textContent = Math.round(data.current_weather.temperature);
-        
+
         // Simple weather description based on weathercode
         const code = data.current_weather.weathercode;
         const iconEl = document.getElementById('weather-icon');
         const descEl = document.getElementById('weather-desc');
-        
+
         if (code === 0) {
             iconEl.className = 'fa-solid fa-sun';
             descEl.textContent = 'Clear sky';
@@ -257,7 +257,7 @@ async function fetchAllData() {
                     computeOverpassCards();
                     render();
                 }
-            } catch (e) {}
+            } catch (e) { }
         })();
 
         // Everything else fires in parallel; each card renders as its query lands.
@@ -296,14 +296,14 @@ function getCachedBikeInfo() {
         if (cached && Array.isArray(cached.stations) && Date.now() - cached.fetched < BIKE_INFO_MAX_AGE) {
             return cached.stations;
         }
-    } catch (e) {}
+    } catch (e) { }
     return null;
 }
 
 function saveBikeInfo(stations) {
     try {
         localStorage.setItem(BIKE_INFO_CACHE_KEY, JSON.stringify({ fetched: Date.now(), stations }));
-    } catch (e) {}
+    } catch (e) { }
 }
 
 async function fetchBikeInfo() {
@@ -337,7 +337,7 @@ async function fetchBikeShareData() {
     status.data.stations.forEach(s => {
         statusMap[s.station_id] = s;
     });
-    
+
     // Combine
     return stations.map(station => ({
         ...station,
@@ -406,14 +406,14 @@ function getCachedMetro() {
         if (cached && Array.isArray(cached.stations) && Date.now() - cached.fetched < METRO_MAX_AGE) {
             return cached.stations;
         }
-    } catch (e) {}
+    } catch (e) { }
     return null;
 }
 
 function saveMetroCache(stations) {
     try {
         localStorage.setItem(METRO_CACHE_KEY, JSON.stringify({ fetched: Date.now(), stations }));
-    } catch (e) {}
+    } catch (e) { }
 }
 
 async function fetchMetroStations() {
@@ -491,7 +491,7 @@ async function fetchOverpassWithTimeout(endpoint, body, controller) {
 function findNearest(items, filterFn, latFn, lonFn) {
     let nearest = null;
     let minD = Infinity;
-    
+
     items.filter(filterFn).forEach(item => {
         const d = getDistance(userLat, userLon, latFn(item), lonFn(item));
         if (d < minD) {
@@ -499,7 +499,7 @@ function findNearest(items, filterFn, latFn, lonFn) {
             nearest = { ...item, distance: d, origLat: latFn(item), origLon: lonFn(item), title: item.name || item.tags?.name || 'Location' };
         }
     });
-    
+
     return nearest;
 }
 
@@ -515,7 +515,7 @@ function bikeStatusText(item) {
 function renderResults(results) {
     const list = document.getElementById('facilities-list');
     list.innerHTML = '';
-    
+
     facilitiesConfigs.forEach(config => {
         const item = results[config.id];
         if (item === undefined) {
@@ -536,13 +536,19 @@ function renderResults(results) {
             `;
             return;
         }
-        
+
         const d = item.distance;
         const bearing = getBearing(userLat, userLon, item.origLat, item.origLon);
-        const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}`;
-        
+        const isAndroid = /Android/i.test(navigator.userAgent);
+        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        const mapUrl = isAndroid
+            ? `google.navigation:q=${item.origLat},${item.origLon}&mode=w`
+            : isIOS
+                ? `comgooglemaps://?daddr=${item.origLat},${item.origLon}&directionsmode=walking`
+                : `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}&travelmode=walking`;
+
         list.innerHTML += `
-            <a href="${mapUrl}" target="_blank" class="facility-card glass-card">
+            <a href="${mapUrl}" class="facility-card glass-card">
                 <div class="facility-icon" style="color: ${config.color}"><i class="fa-solid ${config.icon}"></i></div>
                 <div class="facility-details">
                     <div class="facility-name">${config.name}</div>
