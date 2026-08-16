@@ -31,6 +31,7 @@ body {
     max-width: 600px;
     margin: 0 auto;
     padding: 1.5rem;
+    position: relative;
 }
 
 /* Glassmorphism utilities */
@@ -52,6 +53,7 @@ body {
     justify-content: space-between;
     min-height: 200px;
     position: relative;
+    z-index: 100;
     gap: 0.5rem;
 }
 
@@ -74,9 +76,30 @@ body {
     z-index: 2;
 }
 
+.app-brand {
+    font-size: 2rem;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    letter-spacing: -0.5px;
+    color: #fff;
+    background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.app-brand i {
+    color: var(--accent-color);
+    -webkit-text-fill-color: var(--accent-color);
+    font-size: 1.6rem;
+}
+
 .weather-location {
     font-size: 1.1rem;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
     display: flex;
     flex-direction: column;
@@ -97,6 +120,7 @@ body {
     align-items: center;
     gap: 0.5rem;
     flex-shrink: 0;
+    margin-top: 1.5rem;
 }
 
 .weather-temp i {
@@ -127,6 +151,136 @@ body {
 
 .mini-map .leaflet-control-attribution a {
     color: var(--text-secondary);
+}
+
+/* Header menu */
+.menu-btn {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    z-index: 160;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.menu-btn:hover,
+.menu-btn:active {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.menu-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 150;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+
+.menu-overlay[hidden] {
+    display: none;
+}
+
+.menu-dropdown {
+    position: absolute;
+    top: 4.9rem;
+    right: 2rem;
+    z-index: 160;
+    min-width: 210px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.6);
+    background: #1E293B;
+}
+
+.menu-dropdown[hidden] {
+    display: none;
+}
+
+.menu-section {
+    padding: 0.25rem 0 0.6rem;
+    border-bottom: 1px solid var(--card-border);
+    margin-bottom: 0.3rem;
+}
+
+.menu-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.bike-type-options {
+    display: flex;
+    gap: 0.35rem;
+}
+
+.bike-type-option {
+    flex: 1;
+    padding: 0.45rem 0;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.bike-type-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.bike-type-option.active {
+    background: var(--accent-color);
+    color: #0F172A;
+    border-color: var(--accent-color);
+    font-weight: 600;
+}
+
+.menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.6rem 0.65rem;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-align: left;
+    text-decoration: none;
+    transition: background 0.15s ease;
+}
+
+.menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.menu-item.danger {
+    color: var(--danger-color);
+}
+
+.menu-item i {
+    width: 1rem;
+    text-align: center;
 }
 
 @media (max-width: 420px) {
@@ -305,4 +459,33 @@ body {
     .facility-meta, .facility-status { font-size: 0.75rem; }
     .distance-value { font-size: 1.1rem; }
     .direction-compass { font-size: 0.75rem; }
+}
+
+/* Footer */
+.app-footer {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-top: 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.footer-links {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+}
+
+.footer-links a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.footer-links a:hover {
+    color: var(--accent-color);
 }

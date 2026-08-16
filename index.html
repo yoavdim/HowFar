@@ -1,32 +1,67 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>HowFar | Toronto Facilities</title>
     <meta name="description" content="Find the nearest public facilities in Toronto instantly.">
     <meta name="theme-color" content="#0F172A">
-    
+
     <!-- Google Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    
+
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Leaflet for the mini map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    
+
     <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
+
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon-192.png">
+
+    <!-- GoatCounter Analytics -->
+    <script>
+        // use goat counter - a privacy focused traffic tracker (no user profiling)
+        window.goatcounter = {
+            // Prepends the domain name to the URL path in your dashboard
+            path: location.hostname + location.pathname
+        };
+        // listen for outbound/internal link clicks
+        document.addEventListener("click", function(e) {
+            // Find the closest anchor tag that was clicked
+            var link = e.target.closest("a");
+            if (link && link.href) {
+                if (window.goatcounter && window.goatcounter.count) {
+                    // Use the link's hostname and pathname to build the event name
+                    var linkTarget = link.hostname + link.pathname;
+                    window.goatcounter.count({
+                        path: 'click: ' + linkTarget,
+                        title: 'Link Clicked: ' + linkTarget,
+                        event: true
+                    });
+                }
+            }
+        });
+    </script>
+    <script data-goatcounter="https://yoavdim.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 </head>
+
 <body>
     <div class="app-container">
         <!-- Header: Weather -->
         <header class="weather-header glass-card">
             <div class="weather-info">
                 <div class="weather-location">
+                    <div class="app-brand">
+                        <i class="fa-solid fa-location-arrow"></i> HowFar
+                    </div>
                     <span class="weather-loc-text">Downtown Toronto</span>
                     <p id="weather-desc" class="weather-desc">Loading weather...</p>
                 </div>
@@ -35,19 +70,50 @@
                     <i id="weather-icon" class="fa-solid fa-cloud"></i>
                 </div>
             </div>
-            <div class="mini-map" id="mini-map"></div>
-        </header>
+        <div class="mini-map" id="mini-map"></div>
+    </header>
 
-        <!-- Main Content -->
-        <main>
-            <div class="location-status" id="location-status">
-                <i class="fa-solid fa-location-dot"></i> Finding your location...
+    <div id="menu-overlay" class="menu-overlay" hidden></div>
+    <button id="menu-btn" class="menu-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
+        <i class="fa-solid fa-ellipsis-vertical"></i>
+    </button>
+    <div id="menu-dropdown" class="menu-dropdown glass-card" hidden>
+        <div class="menu-section">
+            <div class="menu-label">Bike preference</div>
+            <div class="bike-type-options">
+                <button class="bike-type-option" data-bike-type="regular">Regular</button>
+                <button class="bike-type-option" data-bike-type="electric">Electric</button>
+                <button class="bike-type-option" data-bike-type="both">Both</button>
             </div>
-            
-            <div class="facilities-list" id="facilities-list">
-                <!-- Cards will be injected here by JavaScript -->
+        </div>
+        <button id="clear-cache-btn" class="menu-item danger">
+            <i class="fa-solid fa-trash-can"></i> Delete cache
+        </button>
+        <div class="menu-section" style="margin-top: 1rem; margin-bottom: 0; padding-top: 1rem;">
+            <div id="data-updated-text" style="font-size: 0.8rem; color: var(--text-secondary);">Last updated:
+                Unknown</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main>
+        <div class="location-status" id="location-status">
+            <i class="fa-solid fa-location-dot"></i> Finding your location...
+        </div>
+
+        <div class="facilities-list" id="facilities-list">
+            <!-- Cards will be injected here by JavaScript -->
+        </div>
+
+        <footer class="app-footer">
+            &copy; 2026 Yoav Dim
+            <div class="footer-links">
+                <a href="https://yoavdim.github.io/Portfolio/" target="_blank" rel="noopener noreferrer">Portfolio</a>
+                <a href="https://www.linkedin.com/in/yoavdim" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+                <a href="mailto:yoavdim@gmail.com">Email</a>
             </div>
-        </main>
+        </footer>
+    </main>
     </div>
 
     <!-- Leaflet JS -->
@@ -55,4 +121,5 @@
     <!-- Custom JS -->
     <script src="app.js"></script>
 </body>
+
 </html>

@@ -33,8 +33,8 @@ function formatDistance(meters) {
 
 // Data structures for the UI
 const facilitiesConfigs = [
-    { id: 'bike-avail', name: 'Bike Share (Available Bike)', icon: 'fa-bicycle', color: '#38BDF8' },
-    { id: 'bike-dock', name: 'Bike Share (Available Dock)', icon: 'fa-square-parking', color: '#38BDF8' },
+    { id: 'bike-avail', name: 'Bikes', icon: 'fa-bicycle', color: '#38BDF8' },
+    { id: 'bike-dock', name: 'Docks', icon: 'fa-square-parking', color: '#38BDF8' },
     { id: 'ttc-metro', name: 'TTC Metro Station', icon: 'fa-train-subway', color: '#EF4444' },
     { id: 'ttc-streetcar-ns', name: 'Streetcar (North/South)', icon: 'fa-train-tram', color: '#EF4444' },
     { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444' },
@@ -70,12 +70,32 @@ function initMiniMap() {
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
-    initWeather();
     renderSkeletonCards();
+    initMenu();
+
+    const fallbackLocation = async () => {
+        updateLocationStatus("GPS blocked. Fetching approximate location via IP...", "error");
+        try {
+            const res = await fetch('https://ipapi.co/json/');
+            const data = await res.json();
+            if (data.latitude && data.longitude) {
+                userLat = data.latitude;
+                userLon = data.longitude;
+                updateLocationStatus(`Approximate location found (${userLat.toFixed(4)}, ${userLon.toFixed(4)}). Fetching facilities...`, "success");
+                initMiniMap();
+                fetchAllData();
+                return;
+            }
+        } catch (e) {
+            console.error("IP Geolocation failed", e);
+        }
+
+        updateLocationStatus("Could not determine location. Please enable GPS or use HTTPS.", "error");
+    };
 
     if ("geolocation" in navigator) {
         const timeoutId = setTimeout(() => {
-            updateLocationStatus("Location request timed out. Please try again.", "error");
+            fallbackLocation();
         }, 15000);
 
         navigator.geolocation.getCurrentPosition(
@@ -92,26 +112,27 @@ document.addEventListener('DOMContentLoaded', () => {
             },
             (error) => {
                 clearTimeout(timeoutId);
-                console.error(error);
-                updateLocationStatus("Could not get your location. Please enable GPS.", "error");
+                console.warn("GPS Error:", error);
+                fallbackLocation();
             },
             { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
         );
     } else {
-        updateLocationStatus("Geolocation is not supported by your browser.", "error");
+        fallbackLocation();
     }
 });
 
 function updateLocationStatus(msg, statusClass = "") {
     const el = document.getElementById('location-status');
+    el.style.display = '';
     el.innerHTML = `<i class="fa-solid fa-location-dot"></i> ${msg}`;
     el.className = `location-status ${statusClass}`;
 }
 
-async function initWeather() {
+async function initWeather(lat, lon) {
     try {
-        // Fetch weather for Downtown Toronto
-        const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=43.6532&longitude=-79.3832&current_weather=true');
+        // Fetch weather for live location
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
         const data = await res.json();
 
         document.getElementById('temp-value').textContent = Math.round(data.current_weather.temperature);
@@ -161,330 +182,286 @@ function renderSkeletonCards() {
 }
 
 async function fetchAllData() {
+    initWeather(userLat, userLon);
+    const statusEl = document.getElementById('location-status');
+    const results = appResults = {};
+    appDone = false;
+
+    const getLat = e => e.lat || e.center?.lat;
+    const getLon = e => e.lon || e.center?.lon;
+    const findNearestOf = (list, filter) => findNearest(list, filter, getLat, getLon);
+
+    // Data buckets, keyed by facility id. A key is only set once its source has
+    // resolved, so cards never show "None found" while data might still be arriving.
+    const data = {};
+
+    const computeCards = () => {
+        if (data.metro) {
+            results['ttc-metro'] = findNearestOf(data.metro, () => true);
+        }
+
+        if (data.tram) {
+            const nearestTram = findNearestOf(data.tram, () => true);
+            let nsFound = findNearestOf(data.tram, e => e.isNS);
+            if (!nsFound && nearestTram) {
+                nsFound = { ...nearestTram, fallback: true };
+            }
+            results['ttc-streetcar-ns'] = nsFound ? { ...nsFound, title: nsFound.tags?.name || 'Streetcar Stop' } : null;
+            let ewFound = findNearestOf(data.tram, e => e.isEW);
+            if (!ewFound && nearestTram) {
+                ewFound = { ...nearestTram, fallback: true };
+            }
+            results['ttc-streetcar-ew'] = ewFound ? { ...ewFound, title: ewFound.tags?.name || 'Streetcar Stop' } : null;
+        }
+
+        if (data.library) {
+            results['library'] = findNearestOf(data.library, () => true);
+        }
+
+        if (data.park) {
+            results['park'] = findNearestOf(data.park, () => true);
+        }
+
+        if (data['tim-hortons']) {
+            results['tim-hortons'] = findNearestOf(data['tim-hortons'], () => true);
+        }
+    };
+
+    const render = () => renderResults(appResults, appDone);
+
+    const setBikeResults = bikes => {
+        currentBikes = bikes;
+        computeBikeResults(appResults);
+        render();
+    };
+
+    // First paint comes instantly from local static data
+    const overpassPromise = (async () => {
+        try {
+            const res = await fetch('toronto_data.json');
+            if (!res.ok) throw new Error("Failed to load static POI data");
+            const parsed = await res.json();
+            
+            if (parsed.lastUpdated) {
+                const date = new Date(parsed.lastUpdated);
+                const updatedEl = document.getElementById('data-updated-text');
+                if (updatedEl) {
+                    updatedEl.textContent = `Last updated: ${date.toLocaleString()}`;
+                }
+            }
+
+            data.metro = parsed.metro;
+            data.tram = parsed.tramStops;
+            parsed.tramStops.forEach(tagStopDirectionByName);
+            data.library = parsed.libraries;
+            data.park = [...parsed.parkNodes, ...parsed.parkWays];
+            data['tim-hortons'] = parsed.timHortons;
+
+            computeCards();
+            render();
+        } catch (e) {
+            console.error("Static data load failed", e);
+        }
+    })();
+
+    const bikePromise = fetchBikeShareData(setBikeResults);
+
+    await Promise.allSettled([overpassPromise, bikePromise]);
+
+    appDone = true;
+    computeCards();
+    render();
+    statusEl.style.display = 'none';
+}
+
+// --- Local cache helpers ---
+function readCache(key) {
     try {
-        const statusEl = document.getElementById('location-status');
-        const cache = loadOverpassCache();
-        const queries = buildOverpassQueries();
-        const elementsByQuery = {};
-        const results = {};
-        const getLat = e => e.lat || e.center?.lat;
-        const getLon = e => e.lon || e.center?.lon;
-        const findNearestOf = (list, filter) => findNearest(list, filter, getLat, getLon);
-
-        // Seed with any cached results so cards appear instantly on repeat visits.
-        Object.keys(queries).forEach(key => {
-            const cached = cache[queries[key].id];
-            if (cached && cached.length) elementsByQuery[key] = cached;
-        });
-        const cachedMetro = getCachedMetro();
-        if (cachedMetro && cachedMetro.length) elementsByQuery.metro = cachedMetro;
-
-        // Only set a result once its query has actually resolved (elementsByQuery key present).
-        // Cards whose query found nothing stay undefined (skeleton) until the final pass, so
-        // "None found nearby" is never shown while data might still be arriving.
-        const computeOverpassCards = () => {
-            if (elementsByQuery.metro) {
-                const found = findNearestOf(elementsByQuery.metro, e => e.tags?.railway === 'station' && (e.tags?.network || '').includes('TTC'));
-                if (found) results['ttc-metro'] = found;
-            }
-            if (elementsByQuery.tram) {
-                const sorted = elementsByQuery.tram
-                    .map(t => ({ ...t, dist: getDistance(userLat, userLon, getLat(t), getLon(t)) }))
-                    .sort((a, b) => a.dist - b.dist);
-                // Approximate directions by the two closest stops.
-                if (sorted[0]) {
-                    results['ttc-streetcar-ns'] = { ...sorted[0], distance: sorted[0].dist, origLat: getLat(sorted[0]), origLon: getLon(sorted[0]), title: sorted[0].tags?.name || 'Streetcar Stop' };
-                }
-                if (sorted[1]) {
-                    results['ttc-streetcar-ew'] = { ...sorted[1], distance: sorted[1].dist, origLat: getLat(sorted[1]), origLon: getLon(sorted[1]), title: sorted[1].tags?.name || 'Streetcar Stop' };
-                }
-            }
-            if (elementsByQuery.library) {
-                const found = findNearestOf(elementsByQuery.library, e => e.tags?.amenity === 'library');
-                if (found) results['library'] = found;
-            }
-            if (elementsByQuery['park-node'] !== undefined || elementsByQuery['park-way'] !== undefined) {
-                const found = findNearestOf([...(elementsByQuery['park-node'] || []), ...(elementsByQuery['park-way'] || [])], e => e.tags?.leisure === 'park');
-                if (found) results['park'] = found;
-            }
-            if (elementsByQuery['tim-hortons']) {
-                const found = findNearestOf(elementsByQuery['tim-hortons'], e => (e.tags?.brand || e.tags?.name || '').toLowerCase().includes('tim hortons'));
-                if (found) results['tim-hortons'] = found;
-            }
-        };
-
-        const render = () => renderResults(results);
-
-        // Show whatever the cache has immediately; live queries update each card as it lands.
-        computeOverpassCards();
-        render();
-
-        // Fetch one query, fall back to its cached copy, then re-render.
-        const fetchQuery = async (key) => {
-            const q = queries[key];
-            try {
-                const data = await fetchOverpassQuery(q.body);
-                const list = data.elements || [];
-                elementsByQuery[key] = list;
-                saveOverpassCache({ [q.id]: list });
-            } catch (e) {
-                const cached = cache[q.id];
-                if (cached && cached.length) elementsByQuery[key] = cached;
-            }
-            computeOverpassCards();
-            render();
-        };
-
-        // Bike cards render the moment the fast feed arrives.
-        const bikePromise = fetchBikeShareData().then(bikes => {
-            results['bike-avail'] = findNearestOf(bikes, s => s.status.num_bikes_available > 0);
-            results['bike-dock'] = findNearestOf(bikes, s => s.status.num_docks_available > 0);
-            render();
-        });
-
-        // Metro: whole network, cached separately; show the cache now, refresh in the background.
-        const metroPromise = (async () => {
-            const cached = getCachedMetro();
-            if (cached && cached.length) {
-                elementsByQuery.metro = cached;
-                computeOverpassCards();
-                render();
-            }
-            try {
-                const fresh = await fetchMetroStations();
-                if (fresh && fresh.length) {
-                    elementsByQuery.metro = fresh;
-                    computeOverpassCards();
-                    render();
-                }
-            } catch (e) { }
-        })();
-
-        // Everything else fires in parallel; each card renders as its query lands.
-        await Promise.all([
-            bikePromise,
-            metroPromise,
-            fetchQuery('park-node'),
-            fetchQuery('park-way'),
-            fetchQuery('tram'),
-            fetchQuery('library'),
-            fetchQuery('tim-hortons')
-        ]);
-
-        // Any card still undefined after every query settled has no data at all → none found.
-        computeOverpassCards();
-        facilitiesConfigs.forEach(c => { if (results[c.id] === undefined) results[c.id] = null; });
-        render();
-
-        statusEl.style.display = 'none';
-    } catch (error) {
-        console.error("Data fetch error", error);
-        updateLocationStatus("Error fetching data. Please try again later.", "error");
+        return JSON.parse(localStorage.getItem(key));
+    } catch (e) {
+        return null;
     }
 }
 
+function writeCache(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+        // Storage full or unavailable — the cache is best-effort, never fatal.
+    }
+}
+
+// --- Bike Share (stale-while-revalidate) ---
 const BIKE_INFO_URL = 'https://tor.publicbikesystem.net/ube/gbfs/v1/en/station_information';
 const BIKE_STATUS_URL = 'https://tor.publicbikesystem.net/ube/gbfs/v1/en/station_status';
-const BIKE_INFO_CACHE_KEY = 'howfar-bike-info-v1';
-const BIKE_INFO_MAX_AGE = 24 * 60 * 60 * 1000; // refetch station list at most once a day
+const BIKE_CACHE_KEY = 'bike_combined_cache';
+const BIKE_MAX_AGE = 5 * 60 * 1000;
 
-// Station locations are static, so cache them (compact form) and only refetch
-// the real-time status feed on every load.
-function getCachedBikeInfo() {
+// Shared app state so the menu can re-render bike cards without re-fetching.
+let appResults = {};
+let appDone = false;
+let currentBikes = null;
+
+// Bike preference: 'regular' | 'electric' | 'both'
+const BIKE_TYPE_KEY = 'howfar-bike-type';
+
+function getBikeTypePref() {
     try {
-        const cached = JSON.parse(localStorage.getItem(BIKE_INFO_CACHE_KEY));
-        if (cached && Array.isArray(cached.stations) && Date.now() - cached.fetched < BIKE_INFO_MAX_AGE) {
-            return cached.stations;
+        return localStorage.getItem(BIKE_TYPE_KEY) || 'both';
+    } catch (e) {
+        return 'both';
+    }
+}
+
+function setBikeTypePref(type) {
+    try {
+        localStorage.setItem(BIKE_TYPE_KEY, type);
+    } catch (e) {
+        // Storage unavailable — preference simply won't persist.
+    }
+}
+
+function computeBikeResults(results) {
+    if (!currentBikes) return;
+    const bikeType = getBikeTypePref();
+    const getLat = e => e.lat || e.center?.lat;
+    const getLon = e => e.lon || e.center?.lon;
+    const hasBike = s => {
+        const st = s.status || {};
+        if (bikeType === 'regular') return (st.num_bikes_available_types?.mechanical ?? 0) > 0;
+        if (bikeType === 'electric') return (st.num_bikes_available_types?.ebike ?? 0) > 0;
+        return (st.num_bikes_available ?? 0) > 0;
+    };
+    results['bike-avail'] = findNearest(currentBikes, hasBike, getLat, getLon);
+    results['bike-dock'] = findNearest(currentBikes, s => (s.status?.num_docks_available ?? 0) > 0, getLat, getLon);
+}
+
+function clearCaches() {
+    try {
+        localStorage.removeItem(BIKE_CACHE_KEY);
+    } catch (e) {
+        // Storage unavailable — nothing to clear.
+    }
+    
+    // Clear Service Worker Caches
+    if ('caches' in window) {
+        caches.keys().then(names => {
+            for (let name of names) {
+                caches.delete(name);
+            }
+        });
+    }
+}
+
+function initMenu() {
+    const btn = document.getElementById('menu-btn');
+    const dropdown = document.getElementById('menu-dropdown');
+    const overlay = document.getElementById('menu-overlay');
+    if (!btn || !dropdown) return;
+
+    const close = () => {
+        dropdown.hidden = true;
+        if (overlay) overlay.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+    };
+
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const willBeHidden = !dropdown.hidden;
+        dropdown.hidden = willBeHidden;
+        if (overlay) overlay.hidden = willBeHidden;
+        btn.setAttribute('aria-expanded', String(!willBeHidden));
+    });
+
+    if (overlay) {
+        overlay.addEventListener('click', close);
+    }
+
+    document.addEventListener('click', e => {
+        if (dropdown.hidden) return;
+        if (e.target === btn || e.target.closest('#menu-dropdown')) return;
+        close();
+    });
+
+    const options = dropdown.querySelectorAll('.bike-type-option');
+    const setActive = type => options.forEach(o => o.classList.toggle('active', o.dataset.bikeType === type));
+    setActive(getBikeTypePref());
+
+    options.forEach(opt => opt.addEventListener('click', () => {
+        const type = opt.dataset.bikeType;
+        setBikeTypePref(type);
+        setActive(type);
+        if (currentBikes) {
+            computeBikeResults(appResults);
+            renderResults(appResults, appDone);
         }
-    } catch (e) { }
-    return null;
-}
-
-function saveBikeInfo(stations) {
-    try {
-        localStorage.setItem(BIKE_INFO_CACHE_KEY, JSON.stringify({ fetched: Date.now(), stations }));
-    } catch (e) { }
-}
-
-async function fetchBikeInfo() {
-    const res = await fetch(BIKE_INFO_URL);
-    if (!res.ok) throw new Error(`Bike share info request failed (${res.status})`);
-    const info = await res.json();
-    const compact = info.data.stations.map(s => ({
-        station_id: s.station_id,
-        name: s.name,
-        lat: s.lat,
-        lon: s.lon
     }));
-    saveBikeInfo(compact);
-    return compact;
+
+    const clearBtn = dropdown.querySelector('#clear-cache-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            clearCaches();
+            currentBikes = null;
+            close();
+            updateLocationStatus('Caches cleared. Refreshing...', 'success');
+            fetchAllData();
+        });
+    }
 }
 
-async function fetchBikeShareData() {
-    const cachedStations = getCachedBikeInfo();
+function getCachedBikes() {
+    const entry = readCache(BIKE_CACHE_KEY);
+    if (!entry || !Array.isArray(entry.data) || !entry.data.length) return null;
+    return { data: entry.data, fresh: Date.now() - entry.timestamp < BIKE_MAX_AGE };
+}
 
-    // Status is always needed (real-time); info only on a cache miss. Both run in parallel.
-    const statusPromise = fetch(BIKE_STATUS_URL);
-    const infoPromise = cachedStations ? null : fetchBikeInfo();
+async function fetchBikeShareLive() {
+    const [info, statusData] = await Promise.all([
+        fetch(BIKE_INFO_URL).then(r => {
+            if (!r.ok) throw new Error(`Bike info request failed (${r.status})`);
+            return r.json();
+        }).then(d => d.data.stations),
+        fetch(BIKE_STATUS_URL).then(r => {
+            if (!r.ok) throw new Error(`Bike status request failed (${r.status})`);
+            return r.json();
+        })
+    ]);
 
-    const statusRes = await statusPromise;
-    if (!statusRes.ok) throw new Error(`Bike share status request failed (${statusRes.status})`);
-    const status = await statusRes.json();
-    const stations = cachedStations || await infoPromise;
-
-    // Map status by station_id for quick lookup
     const statusMap = {};
-    status.data.stations.forEach(s => {
+    statusData.data.stations.forEach(s => {
         statusMap[s.station_id] = s;
     });
 
-    // Combine
-    return stations.map(station => ({
+    return info.map(station => ({
         ...station,
         status: statusMap[station.station_id] || { num_bikes_available: 0, num_docks_available: 0 }
     }));
 }
 
-const OVERPASS_ENDPOINTS = [
-    'https://overpass.private.coffee/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
-    'https://overpass-api.de/api/interpreter'
-];
-
-// Bounds covering every TTC subway/RT station in the GTA (Lines 1, 2, 4 + Vaughan ext.)
-const TORONTO_BBOX = '43.50,-79.75,43.90,-78.90';
-const STREETCAR_RADIUS = 2000;
-const LOCAL_RADIUS = 4000;
-
-// Small sub-queries run in parallel so one slow query never blocks the rest.
-// The park query is split so a heavy way-query failure can't wipe out the node results.
-// Metro is fetched once for the whole network (location-independent); streetcars use a
-// tighter radius since they are dense downtown.
-function buildOverpassQueries() {
-    return {
-        metro: { id: 'metro', body: `node["railway"="station"]["network"~"TTC"](${TORONTO_BBOX});` },
-        tram: { id: 'tram', body: `node["railway"="tram_stop"](around:${STREETCAR_RADIUS}, ${userLat}, ${userLon});` },
-        library: { id: 'library', body: `node["amenity"="library"](around:${LOCAL_RADIUS}, ${userLat}, ${userLon});` },
-        'park-node': { id: 'park-node', body: `node["leisure"="park"](around:${LOCAL_RADIUS}, ${userLat}, ${userLon});` },
-        'park-way': { id: 'park-way', body: `way["leisure"="park"](around:${LOCAL_RADIUS}, ${userLat}, ${userLon});` },
-        'tim-hortons': { id: 'tim-hortons', body: `node["brand"="Tim Hortons"](around:${LOCAL_RADIUS}, ${userLat}, ${userLon});` }
-    };
-}
-
-// Cache successful overpass results per ~1km area so a flaky mirror never
-// leaves cards permanently empty on a refresh.
-function overpassCacheKey() {
-    return 'howfar-overpass-v1:' + Math.round(userLat * 100) + ',' + Math.round(userLon * 100);
-}
-
-function loadOverpassCache() {
+// Always fetch fresh data first. Fallback to cache only if network fails.
+async function fetchBikeShareData(onUpdate) {
     try {
-        return JSON.parse(localStorage.getItem(overpassCacheKey())) || {};
-    } catch (e) {
-        return {};
-    }
-}
-
-function saveOverpassCache(byId) {
-    try {
-        const key = overpassCacheKey();
-        const merged = { ...loadOverpassCache(), ...byId };
-        localStorage.setItem(key, JSON.stringify(merged));
-    } catch (e) {
-        // localStorage full or unavailable; ignore
-    }
-}
-
-// Metro stations are static and location-independent, so keep a separate
-// long-lived cache for the whole network instead of the per-location cache above.
-const METRO_CACHE_KEY = 'howfar-metro-v1';
-const METRO_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-
-function getCachedMetro() {
-    try {
-        const cached = JSON.parse(localStorage.getItem(METRO_CACHE_KEY));
-        if (cached && Array.isArray(cached.stations) && Date.now() - cached.fetched < METRO_MAX_AGE) {
-            return cached.stations;
-        }
-    } catch (e) { }
-    return null;
-}
-
-function saveMetroCache(stations) {
-    try {
-        localStorage.setItem(METRO_CACHE_KEY, JSON.stringify({ fetched: Date.now(), stations }));
-    } catch (e) { }
-}
-
-async function fetchMetroStations() {
-    const cached = getCachedMetro();
-    if (cached) return cached;
-    const data = await fetchOverpassQuery(`node["railway"="station"]["network"~"TTC"](${TORONTO_BBOX});`);
-    const list = data.elements || [];
-    if (list.length) saveMetroCache(list);
-    return list;
-}
-
-async function fetchOverpassQuery(queryBody) {
-    const MAX_ATTEMPTS = 3;
-    let lastError = null;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
-        try {
-            return await raceOverpassMirrors(queryBody);
-        } catch (e) {
-            lastError = e;
+        const fresh = await fetchBikeShareLive();
+        writeCache(BIKE_CACHE_KEY, { timestamp: Date.now(), data: fresh });
+        onUpdate(fresh);
+    } catch (err) {
+        console.warn("Live bike fetch failed, falling back to cache", err);
+        const cached = getCachedBikes();
+        if (cached && cached.data) {
+            onUpdate(cached.data);
+        } else {
+            console.error("No cached bike data available.");
         }
     }
-    throw lastError || new Error('All Overpass endpoints failed');
 }
 
-// Fire all mirrors at once (with a small stagger to dodge rate limits);
-// resolve as soon as the fastest one succeeds.
-async function raceOverpassMirrors(queryBody) {
-    const body = `[out:json][timeout:25];(${queryBody});out center;`;
-    const controllers = OVERPASS_ENDPOINTS.map(() => new AbortController());
-    const attempts = OVERPASS_ENDPOINTS.map((endpoint, i) =>
-        new Promise(resolve => setTimeout(resolve, Math.random() * 500))
-            .then(() => fetchOverpassWithTimeout(endpoint, body, controllers[i]))
-    );
-
-    return await new Promise((resolve, reject) => {
-        let pending = attempts.length;
-        let done = false;
-        attempts.forEach((promise) => {
-            promise.then(
-                (value) => {
-                    if (!done) {
-                        done = true;
-                        controllers.forEach(c => c.abort());
-                        resolve(value);
-                    }
-                },
-                () => {
-                    if (!done && --pending === 0) reject(new Error('All Overpass endpoints failed'));
-                }
-            );
-        });
-    });
-}
-
-async function fetchOverpassWithTimeout(endpoint, body, controller) {
-    const timer = setTimeout(() => controller.abort(), 15000);
-    try {
-        const res = await fetch(endpoint, {
-            method: 'POST',
-            signal: controller.signal,
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'HowFarApp/1.0'
-            },
-            body: 'data=' + encodeURIComponent(body)
-        });
-        if (!res.ok) throw new Error(`Overpass request failed (${res.status})`);
-        return await res.json();
-    } finally {
-        clearTimeout(timer);
+// --- TTC tram stop names carry the direction ---
+function tagStopDirectionByName(stop) {
+    const name = (stop.tags?.name || '').toLowerCase();
+    if (name.includes('eastbound') || name.includes('westbound')) {
+        stop.isEW = true;
+    } else if (name.includes('northbound') || name.includes('southbound')) {
+        stop.isNS = true;
     }
 }
 
@@ -503,26 +480,47 @@ function findNearest(items, filterFn, latFn, lonFn) {
     return nearest;
 }
 
-function bikeStatusText(item) {
+function bikeStatusText(item, cardId) {
     if (!item.status) return '';
     const s = item.status;
-    const bikes = s.num_bikes_available ?? 0;
-    const docks = s.num_docks_available ?? 0;
-    const nonElectric = s.num_bikes_available_types?.mechanical ?? 0;
-    return `${bikes} bikes · ${docks} docks (${nonElectric} non-electric)`;
+    if (cardId === 'bike-avail') {
+        const mech = s.num_bikes_available_types?.mechanical ?? 0;
+        const ebike = s.num_bikes_available_types?.ebike ?? 0;
+        return `${mech} regular · ${ebike} electric`;
+    }
+    if (cardId === 'bike-dock') {
+        const docks = s.num_docks_available ?? 0;
+        return `${docks} docks`;
+    }
+    return '';
 }
 
-function renderResults(results) {
+function renderResults(results, isDone = false) {
     const list = document.getElementById('facilities-list');
     list.innerHTML = '';
 
     facilitiesConfigs.forEach(config => {
         const item = results[config.id];
+
         if (item === undefined) {
-            // Still loading — keep a skeleton so cards never flicker to "none found".
-            list.innerHTML += skeletonCard(config);
+            if (isDone) {
+                // The global fetch has finished, so if this is still undefined, the API failed
+                list.innerHTML += `
+                    <div class="facility-card glass-card" style="border-color: rgba(239, 68, 68, 0.3);">
+                        <div class="facility-icon" style="color: #EF4444;"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                        <div class="facility-details">
+                            <div class="facility-name">${config.name}</div>
+                            <div class="facility-meta" style="color: #EF4444;">Error loading data</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // Still loading — keep a skeleton so cards never flicker to "none found".
+                list.innerHTML += skeletonCard(config);
+            }
             return;
         }
+
         if (!item) {
             // Render not found state
             list.innerHTML += `
@@ -553,7 +551,8 @@ function renderResults(results) {
                 <div class="facility-details">
                     <div class="facility-name">${config.name}</div>
                     <div class="facility-meta">${item.title}</div>
-                    ${item.status ? `<div class="facility-status">${bikeStatusText(item)}</div>` : ''}
+                    ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
+                    ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
                 </div>
                 <div class="facility-distance">
                     <div class="distance-value">${formatDistance(d)}</div>
@@ -564,5 +563,16 @@ function renderResults(results) {
                 </div>
             </a>
         `;
+    });
+}
+
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').then(reg => {
+            console.log('Service Worker registered!', reg);
+        }).catch(err => {
+            console.warn('Service Worker registration failed:', err);
+        });
     });
 }
