@@ -546,7 +546,7 @@ function renderResults(results, isDone = false) {
                 : `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}&travelmode=walking`;
 
         list.innerHTML += `
-            <a href="${mapUrl}" class="facility-card glass-card">
+            <a href="${mapUrl}" class="facility-card glass-card" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}">
                 <div class="facility-icon" style="color: ${config.color}"><i class="fa-solid ${config.icon}"></i></div>
                 <div class="facility-details">
                     <div class="facility-name">${config.name}</div>

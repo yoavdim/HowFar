@@ -48,6 +48,11 @@
                 if (window.goatcounter && window.goatcounter.count) {
                     // Use the link's hostname and pathname to build the event name
                     var linkTarget = link.hostname + link.pathname;
+                    var navType = link.getAttribute("data-nav-type");
+                    if (navType) {
+                        // Facility navigation card: track type + card name, never the GPS/URL
+                        linkTarget = navType + ' · ' + (link.getAttribute("data-name") || 'facility');
+                    }
                     window.goatcounter.count({
                         path: 'click: ' + linkTarget,
                         title: 'Link Clicked: ' + linkTarget,
