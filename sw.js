@@ -6,7 +6,10 @@ const CACHE_ASSETS = [
     './style.css',
     './app.js',
     './toronto_data.json',
-    './manifest.json'
+    './manifest.json',
+    './icon-192.png',
+    './icon-512.png',
+    './icon.png'
 ];
 
 // Install Event
