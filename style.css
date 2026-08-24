@@ -264,12 +264,12 @@ body {
 }
 
 .menu-label {
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-secondary);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.85rem;
 }
 
 .bike-type-options {

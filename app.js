@@ -257,7 +257,7 @@ async function fetchAllData() {
                 const date = new Date(parsed.lastUpdated);
                 const updatedEl = document.getElementById('data-updated-text');
                 if (updatedEl) {
-                    updatedEl.textContent = `Last updated: ${date.toLocaleString()}`;
+                    updatedEl.textContent = `Stations updated: ${date.toLocaleString()}`;
                 }
             }
 
@@ -548,9 +548,34 @@ function renderFacilityItem(config, results, isDone) {
             ? `comgooglemaps://?daddr=${item.origLat},${item.origLon}&directionsmode=walking`
             : `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}&travelmode=walking`;
 
+    const isBike = config.id === 'bike-avail' || config.id === 'bike-dock';
+    const isTransit = config.id === 'ttc-subway' || config.id === 'ttc-streetcar';
+
+    // Bike Share Toronto's new official app package name
+    const bikeAppUrl = isAndroid 
+        ? 'intent://#Intent;package=com.lyft.android.bikesharetoronto;end' 
+        : 'https://bikesharetoronto.com/';
+        
+    // Deep links for Google Wallet / Apple Wallet
+    const walletAppUrl = isAndroid
+        ? 'intent://#Intent;package=com.google.android.apps.walletnfcrel;end'
+        : 'shoebox://';
+
+    let iconAction = '';
+    // Only intercept clicks to open mobile apps if we are actually on a mobile device
+    if (isAndroid || isIOS) {
+        if (isBike) {
+            iconAction = `onclick="event.preventDefault(); event.stopPropagation(); window.location.href='${bikeAppUrl}';"`;
+        } else if (isTransit) {
+            iconAction = `onclick="event.preventDefault(); event.stopPropagation(); window.location.href='${walletAppUrl}';"`;
+        }
+    }
+
     return `
         <a href="${mapUrl}" class="facility-item" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}">
-            <div class="facility-icon" style="color: ${config.color}"><i class="fa-solid ${config.icon}"></i></div>
+            <div class="facility-icon" style="color: ${config.color}" ${iconAction}>
+                <i class="fa-solid ${config.icon}"></i>
+            </div>
             <div class="facility-details">
                 <div class="facility-name">${config.name}</div>
                 <div class="facility-meta">${item.title}</div>
