@@ -336,23 +336,36 @@ body {
     gap: 1rem;
 }
 
-.facility-card {
+/* Each group is one glass card containing multiple items */
+.facility-group {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+}
+
+/* Thin divider between items inside a group */
+.group-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 0 1.25rem;
+}
+
+/* Individual item inside a group */
+.facility-item {
     display: flex;
     align-items: center;
-    padding: 1.25rem;
+    padding: 1.1rem 1.25rem;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background 0.15s ease;
     text-decoration: none;
     color: inherit;
     position: relative;
     overflow: hidden;
 }
 
-.facility-card:hover, .facility-card:active {
-    transform: translateY(-2px) scale(1.01);
-    background: rgba(45, 55, 72, 0.8);
-    box-shadow: 0 15px 35px -10px rgba(0, 0, 0, 0.6);
-    border-color: rgba(255, 255, 255, 0.2);
+.facility-item:hover, .facility-item:active {
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .facility-icon {
@@ -453,7 +466,7 @@ body {
     .weather-header { padding: 1.25rem; min-height: 180px; }
     .weather-temp { font-size: 2rem; }
     .weather-temp i { font-size: 1.5rem; }
-    .facility-card { padding: 1rem; }
+    .facility-item { padding: 1rem; }
     .facility-icon { width: 40px; height: 40px; font-size: 1.1rem; margin-right: 1rem; }
     .facility-name { font-size: 0.95rem; }
     .facility-meta, .facility-status { font-size: 0.75rem; }

@@ -33,15 +33,17 @@ function formatDistance(meters) {
 
 // Data structures for the UI
 const facilitiesConfigs = [
-    { id: 'bike-avail', name: 'Bikes', icon: 'fa-bicycle', color: '#38BDF8' },
-    { id: 'bike-dock', name: 'Docks', icon: 'fa-square-parking', color: '#38BDF8' },
-    { id: 'ttc-metro', name: 'TTC Metro Station', icon: 'fa-train-subway', color: '#EF4444' },
-    { id: 'ttc-streetcar-ns', name: 'Streetcar (North/South)', icon: 'fa-train-tram', color: '#EF4444' },
-    { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444' },
-    { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981' },
-    { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981' },
-    { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B' }
+    { id: 'bike-avail', name: 'Bikes', icon: 'fa-bicycle', color: '#38BDF8', group: 'bikes' },
+    { id: 'bike-dock', name: 'Docks', icon: 'fa-square-parking', color: '#38BDF8', group: 'bikes' },
+    { id: 'ttc-metro', name: 'TTC Metro Station', icon: 'fa-train-subway', color: '#EF4444', group: 'ttc' },
+    { id: 'ttc-streetcar-ns', name: 'Streetcar (North/South)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
+    { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
+    { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'other' },
+    { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'other' },
+    { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
 ];
+
+const facilityGroups = ['bikes', 'ttc', 'other'];
 
 let userLat = null;
 let userLon = null;
@@ -164,9 +166,9 @@ async function initWeather(lat, lon) {
     }
 }
 
-function skeletonCard(config) {
+function skeletonItem(config) {
     return `
-        <div class="facility-card glass-card skeleton">
+        <div class="facility-item skeleton">
             <div class="facility-icon"><i class="fa-solid ${config.icon}"></i></div>
             <div class="facility-details">
                 <div class="skeleton-text"></div>
@@ -178,7 +180,10 @@ function skeletonCard(config) {
 
 function renderSkeletonCards() {
     const list = document.getElementById('facilities-list');
-    list.innerHTML = facilitiesConfigs.map(skeletonCard).join('');
+    list.innerHTML = facilityGroups.map(group => {
+        const configs = facilitiesConfigs.filter(c => c.group === group);
+        return `<div class="facility-group glass-card">${configs.map(skeletonItem).join('<div class="group-divider"></div>')}</div>`;
+    }).join('');
 }
 
 async function fetchAllData() {
@@ -495,75 +500,70 @@ function bikeStatusText(item, cardId) {
     return '';
 }
 
-function renderResults(results, isDone = false) {
-    const list = document.getElementById('facilities-list');
-    list.innerHTML = '';
+function renderFacilityItem(config, results, isDone) {
+    const item = results[config.id];
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-    facilitiesConfigs.forEach(config => {
-        const item = results[config.id];
-
-        if (item === undefined) {
-            if (isDone) {
-                // The global fetch has finished, so if this is still undefined, the API failed
-                list.innerHTML += `
-                    <div class="facility-card glass-card" style="border-color: rgba(239, 68, 68, 0.3);">
-                        <div class="facility-icon" style="color: #EF4444;"><i class="fa-solid fa-triangle-exclamation"></i></div>
-                        <div class="facility-details">
-                            <div class="facility-name">${config.name}</div>
-                            <div class="facility-meta" style="color: #EF4444;">Error loading data</div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                // Still loading — keep a skeleton so cards never flicker to "none found".
-                list.innerHTML += skeletonCard(config);
-            }
-            return;
-        }
-
-        if (!item) {
-            // Render not found state
-            list.innerHTML += `
-                <div class="facility-card glass-card" style="opacity: 0.6">
-                    <div class="facility-icon" style="color: ${config.color}"><i class="fa-solid ${config.icon}"></i></div>
+    if (item === undefined) {
+        if (isDone) {
+            return `
+                <div class="facility-item" style="border-color: rgba(239, 68, 68, 0.3);">
+                    <div class="facility-icon" style="color: #EF4444;"><i class="fa-solid fa-triangle-exclamation"></i></div>
                     <div class="facility-details">
                         <div class="facility-name">${config.name}</div>
-                        <div class="facility-meta">None found nearby</div>
+                        <div class="facility-meta" style="color: #EF4444;">Error loading data</div>
                     </div>
-                </div>
-            `;
-            return;
+                </div>`;
         }
+        return skeletonItem(config);
+    }
 
-        const d = item.distance;
-        const bearing = getBearing(userLat, userLon, item.origLat, item.origLon);
-        const isAndroid = /Android/i.test(navigator.userAgent);
-        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-        const mapUrl = isAndroid
-            ? `google.navigation:q=${item.origLat},${item.origLon}&mode=w`
-            : isIOS
-                ? `comgooglemaps://?daddr=${item.origLat},${item.origLon}&directionsmode=walking`
-                : `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}&travelmode=walking`;
-
-        list.innerHTML += `
-            <a href="${mapUrl}" class="facility-card glass-card" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}">
+    if (!item) {
+        return `
+            <div class="facility-item" style="opacity: 0.6">
                 <div class="facility-icon" style="color: ${config.color}"><i class="fa-solid ${config.icon}"></i></div>
                 <div class="facility-details">
                     <div class="facility-name">${config.name}</div>
-                    <div class="facility-meta">${item.title}</div>
-                    ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
-                    ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
+                    <div class="facility-meta">None found nearby</div>
                 </div>
-                <div class="facility-distance">
-                    <div class="distance-value">${formatDistance(d)}</div>
-                    <div class="direction-compass">
-                        <i class="fa-solid fa-location-arrow compass-arrow" style="transform: rotate(${bearing - 45}deg);"></i> 
-                        <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; opacity: 0.5;"></i>
-                    </div>
+            </div>`;
+    }
+
+    const d = item.distance;
+    const bearing = getBearing(userLat, userLon, item.origLat, item.origLon);
+    const mapUrl = isAndroid
+        ? `google.navigation:q=${item.origLat},${item.origLon}&mode=w`
+        : isIOS
+            ? `comgooglemaps://?daddr=${item.origLat},${item.origLon}&directionsmode=walking`
+            : `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}&travelmode=walking`;
+
+    return `
+        <a href="${mapUrl}" class="facility-item" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}">
+            <div class="facility-icon" style="color: ${config.color}"><i class="fa-solid ${config.icon}"></i></div>
+            <div class="facility-details">
+                <div class="facility-name">${config.name}</div>
+                <div class="facility-meta">${item.title}</div>
+                ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
+                ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
+            </div>
+            <div class="facility-distance">
+                <div class="distance-value">${formatDistance(d)}</div>
+                <div class="direction-compass">
+                    <i class="fa-solid fa-location-arrow compass-arrow" style="transform: rotate(${bearing - 45}deg);"></i>
+                    <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; opacity: 0.5;"></i>
                 </div>
-            </a>
-        `;
-    });
+            </div>
+        </a>`;
+}
+
+function renderResults(results, isDone = false) {
+    const list = document.getElementById('facilities-list');
+    list.innerHTML = facilityGroups.map(group => {
+        const configs = facilitiesConfigs.filter(c => c.group === group);
+        const items = configs.map(config => renderFacilityItem(config, results, isDone));
+        return `<div class="facility-group glass-card">${items.join('<div class="group-divider"></div>')}</div>`;
+    }).join('');
 }
 
 // Register Service Worker for PWA
