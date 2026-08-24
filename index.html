@@ -70,6 +70,20 @@
     <div class="app-container">
         <!-- Header: Weather -->
         <header class="weather-header glass-card">
+            <!-- Compact sticky bar (visible when scrolled) -->
+            <div class="header-bar">
+                <div class="app-brand-sm">
+                    <i class="fa-solid fa-location-arrow"></i> HowFar
+                </div>
+                <div class="header-bar-right">
+                    <span class="header-temp"><span id="temp-value-bar">--</span>°C <i id="weather-icon-bar" class="fa-solid fa-cloud"></i></span>
+                    <button id="menu-btn-bar" class="menu-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
+                        <i class="fa-solid fa-ellipsis-vertical"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Expanded header content -->
             <div class="weather-info">
                 <div class="weather-location">
                     <div class="app-brand">
@@ -83,13 +97,14 @@
                     <i id="weather-icon" class="fa-solid fa-cloud"></i>
                 </div>
             </div>
-        <div class="mini-map" id="mini-map"></div>
-    </header>
+            <div class="mini-map" id="mini-map"></div>
+            
+            <button id="menu-btn" class="menu-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
+                <i class="fa-solid fa-ellipsis-vertical"></i>
+            </button>
+        </header>
 
     <div id="menu-overlay" class="menu-overlay" hidden></div>
-    <button id="menu-btn" class="menu-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
-        <i class="fa-solid fa-ellipsis-vertical"></i>
-    </button>
     <div id="menu-dropdown" class="menu-dropdown glass-card" hidden>
         <div class="menu-section">
             <div class="menu-label">Bike preference</div>
@@ -119,11 +134,17 @@
         </div>
 
         <footer class="app-footer">
-            &copy; 2026 Yoav Dim
+            <span>&copy; 2026 Yoav Dim</span>
             <div class="footer-links">
-                <a href="https://yoavdim.github.io/Portfolio/" target="_blank" rel="noopener noreferrer">Portfolio</a>
-                <a href="https://www.linkedin.com/in/yoavdim" target="_blank" rel="noopener noreferrer">LinkedIn</a>
-                <a href="mailto:yoavdim@gmail.com">Email</a>
+                <a href="https://yoavdim.github.io/Portfolio/" target="_blank" rel="noopener noreferrer" aria-label="Portfolio">
+                    <i class="fa-solid fa-laptop-code"></i>
+                </a>
+                <a href="https://www.linkedin.com/in/yoavdim" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+                    <i class="fa-brands fa-linkedin"></i>
+                </a>
+                <a href="mailto:yoavdim@gmail.com" aria-label="Email">
+                    <i class="fa-solid fa-envelope"></i>
+                </a>
             </div>
         </footer>
     </main>

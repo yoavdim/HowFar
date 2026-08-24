@@ -23,7 +23,6 @@ body {
         radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.05), transparent 25%);
     color: var(--text-primary);
     min-height: 100vh;
-    padding-bottom: 2rem;
     -webkit-font-smoothing: antialiased;
 }
 
@@ -74,6 +73,7 @@ body {
     gap: 1rem;
     position: relative;
     z-index: 2;
+    transition: opacity 0.3s ease;
 }
 
 .app-brand {
@@ -153,11 +153,60 @@ body {
     color: var(--text-secondary);
 }
 
+/* Compact header bar (collapsed state, mobile only) */
+.header-bar {
+    display: none; /* hidden on desktop */
+    align-items: center;
+    justify-content: space-between;
+    position: absolute;
+    bottom: 0;
+    left: 1rem;
+    right: 1rem;
+    z-index: 10;
+    height: 60px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+#menu-btn-bar {
+    position: static;
+}
+
+.app-brand-sm {
+    font-size: 1.1rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.app-brand-sm i {
+    color: var(--accent-color);
+    -webkit-text-fill-color: var(--accent-color);
+}
+
+.header-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.header-temp {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
 /* Header menu */
 .menu-btn {
     position: absolute;
-    top: 2rem;
-    right: 2rem;
+    top: 1.5rem;
+    right: 1.5rem;
     z-index: 160;
     width: 36px;
     height: 36px;
@@ -368,19 +417,16 @@ body {
     background: rgba(255, 255, 255, 0.05);
 }
 
+
 .facility-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    background: rgba(255,255,255,0.05);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.25rem;
-    margin-right: 1.25rem;
+    font-size: 1.5rem;
+    margin-right: 2rem;
     color: var(--accent-color);
     flex-shrink: 0;
+    width: 1.5rem;
+    text-align: center;
 }
+
 
 .facility-details {
     flex-grow: 1;
@@ -465,32 +511,78 @@ body {
     .app-container { padding: 1rem 0.75rem; }
     .weather-header { padding: 1.25rem; min-height: 180px; }
     .weather-temp { font-size: 2rem; }
-    .weather-temp i { font-size: 1.5rem; }
+    .weather-temp i { font-size: 1.3rem; }
     .facility-item { padding: 1rem; }
-    .facility-icon { width: 40px; height: 40px; font-size: 1.1rem; margin-right: 1rem; }
+    .facility-icon { font-size: 1.3rem; margin-right: 1.5rem; }
     .facility-name { font-size: 0.95rem; }
     .facility-meta, .facility-status { font-size: 0.75rem; }
     .distance-value { font-size: 1.1rem; }
     .direction-compass { font-size: 0.75rem; }
+    
+    /* Full-bleed cards */
+    .glass-card.facility-group { box-shadow: none; }
+    .facility-item { border-radius: 0; border-left: none; border-right: none; }
+    
+    #facilities-list { gap: 1rem; }
+    .app-footer { margin-top: 0.5rem; }
+
+    /* Sticky native scrolling header */
+    .weather-header {
+        position: sticky;
+        top: -120px;
+        height: 180px;
+        margin: -1rem -0.75rem 1.25rem;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        z-index: 100;
+    }
+    .weather-header::after { border-radius: 0; transition: opacity 0.3s ease; }
+    .mini-map { border-radius: 0; border: none; transition: opacity 0.3s ease; }
+
+    .header-bar { display: flex; }
+
+    .weather-header.scrolled {
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    .weather-header.scrolled::after {
+        opacity: 0.85;
+    }
+    .weather-header.scrolled .header-bar {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    .weather-header.scrolled .weather-info {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .weather-header > .menu-btn {
+        top: 1.25rem;
+        right: 1.25rem;
+        transition: opacity 0.3s ease;
+    }
 }
 
 /* Footer */
 .app-footer {
-    text-align: center;
-    padding: 2rem 1rem;
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 0;
+    margin-top: 0.5rem;
     color: var(--text-secondary);
     font-size: 0.85rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    margin-top: 2rem;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .footer-links {
     display: flex;
-    justify-content: center;
-    gap: 1.5rem;
+    align-items: center;
+    gap: 1rem;
+    font-size: 1.15rem; /* Make icons a bit larger */
 }
 
 .footer-links a {

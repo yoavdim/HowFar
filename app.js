@@ -78,8 +78,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const fallbackLocation = async () => {
         updateLocationStatus("GPS blocked. Fetching approximate location via IP...", "error");
         try {
-            const res = await fetch('https://ipapi.co/json/');
-            const data = await res.json();
+            let data = JSON.parse(localStorage.getItem('hf_ip')) || {};
+            if (Date.now() - (data.t || 0) > 120000) {
+                data = await (await fetch('https://ipapi.co/json/')).json();
+                localStorage.setItem('hf_ip', JSON.stringify({ ...data, t: Date.now() }));
+            }
             if (data.latitude && data.longitude) {
                 userLat = data.latitude;
                 userLon = data.longitude;
@@ -122,6 +125,12 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         fallbackLocation();
     }
+
+    // Sticky collapsing header (mobile only)
+    const header = document.querySelector('.weather-header');
+    window.addEventListener('scroll', () => {
+        if (window.innerWidth <= 600) header.classList.toggle('scrolled', window.scrollY > 60);
+    }, { passive: true });
 });
 
 function updateLocationStatus(msg, statusClass = "") {
@@ -137,29 +146,26 @@ async function initWeather(lat, lon) {
         const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
         const data = await res.json();
 
-        document.getElementById('temp-value').textContent = Math.round(data.current_weather.temperature);
+        const temp = Math.round(data.current_weather.temperature);
+        document.getElementById('temp-value').textContent = temp;
+        document.getElementById('temp-value-bar').textContent = temp;
 
         // Simple weather description based on weathercode
         const code = data.current_weather.weathercode;
         const iconEl = document.getElementById('weather-icon');
+        const iconBarEl = document.getElementById('weather-icon-bar');
         const descEl = document.getElementById('weather-desc');
 
-        if (code === 0) {
-            iconEl.className = 'fa-solid fa-sun';
-            descEl.textContent = 'Clear sky';
-        } else if (code >= 1 && code <= 3) {
-            iconEl.className = 'fa-solid fa-cloud-sun';
-            descEl.textContent = 'Partly cloudy';
-        } else if (code >= 51 && code <= 67) {
-            iconEl.className = 'fa-solid fa-cloud-rain';
-            descEl.textContent = 'Rain';
-        } else if (code >= 71 && code <= 82) {
-            iconEl.className = 'fa-solid fa-snowflake';
-            descEl.textContent = 'Snow';
-        } else {
-            iconEl.className = 'fa-solid fa-cloud';
-            descEl.textContent = 'Cloudy';
-        }
+        let iconClass, desc;
+        if (code === 0)                         { iconClass = 'fa-solid fa-sun';        desc = 'Clear sky'; }
+        else if (code >= 1 && code <= 3)        { iconClass = 'fa-solid fa-cloud-sun';  desc = 'Partly cloudy'; }
+        else if (code >= 51 && code <= 67)      { iconClass = 'fa-solid fa-cloud-rain'; desc = 'Rain'; }
+        else if (code >= 71 && code <= 82)      { iconClass = 'fa-solid fa-snowflake';  desc = 'Snow'; }
+        else                                    { iconClass = 'fa-solid fa-cloud';       desc = 'Cloudy'; }
+
+        iconEl.className = iconClass;
+        iconBarEl.className = iconClass;
+        descEl.textContent = desc;
     } catch (e) {
         console.error("Weather fetch failed", e);
         document.getElementById('weather-desc').textContent = "Weather unavailable";
@@ -360,6 +366,7 @@ function clearCaches() {
 
 function initMenu() {
     const btn = document.getElementById('menu-btn');
+    const btnBar = document.getElementById('menu-btn-bar');
     const dropdown = document.getElementById('menu-dropdown');
     const overlay = document.getElementById('menu-overlay');
     if (!btn || !dropdown) return;
@@ -367,16 +374,19 @@ function initMenu() {
     const close = () => {
         dropdown.hidden = true;
         if (overlay) overlay.hidden = true;
-        btn.setAttribute('aria-expanded', 'false');
+        [btn, btnBar].forEach(b => b && b.setAttribute('aria-expanded', 'false'));
     };
 
-    btn.addEventListener('click', e => {
+    const toggle = (e) => {
         e.stopPropagation();
         const willBeHidden = !dropdown.hidden;
         dropdown.hidden = willBeHidden;
         if (overlay) overlay.hidden = willBeHidden;
-        btn.setAttribute('aria-expanded', String(!willBeHidden));
-    });
+        [btn, btnBar].forEach(b => b && b.setAttribute('aria-expanded', String(!willBeHidden)));
+    };
+
+    btn.addEventListener('click', toggle);
+    if (btnBar) btnBar.addEventListener('click', toggle);
 
     if (overlay) {
         overlay.addEventListener('click', close);
@@ -384,7 +394,7 @@ function initMenu() {
 
     document.addEventListener('click', e => {
         if (dropdown.hidden) return;
-        if (e.target === btn || e.target.closest('#menu-dropdown')) return;
+        if (e.target === btn || e.target === btnBar || e.target.closest('#menu-dropdown')) return;
         close();
     });
 
