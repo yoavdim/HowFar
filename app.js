@@ -561,35 +561,34 @@ function renderFacilityItem(config, results, isDone) {
         ? 'intent://#Intent;package=com.google.android.apps.walletnfcrel;end'
         : 'shoebox://';
 
-    let iconAction = '';
-    // Only intercept clicks to open mobile apps if we are actually on a mobile device
+    let iconHref = mapUrl;
     if (isAndroid || isIOS) {
-        if (isBike) {
-            iconAction = `onclick="event.preventDefault(); event.stopPropagation(); window.location.href='${bikeAppUrl}';"`;
-        } else if (isTransit) {
-            iconAction = `onclick="event.preventDefault(); event.stopPropagation(); window.location.href='${walletAppUrl}';"`;
-        }
+        if (isBike) iconHref = bikeAppUrl;
+        else if (isTransit) iconHref = walletAppUrl;
     }
 
     return `
-        <a href="${mapUrl}" class="facility-item" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}">
-            <div class="facility-icon" style="color: ${config.color}" ${iconAction}>
+        <div class="facility-item" style="padding: 0; display: flex;">
+            <a href="${iconHref}" class="facility-icon" style="color: ${config.color}; padding: 1.1rem 1rem 1.1rem 1.25rem; margin-right: 1rem; text-decoration: none;">
                 <i class="fa-solid ${config.icon}"></i>
-            </div>
-            <div class="facility-details">
-                <div class="facility-name">${config.name}</div>
-                <div class="facility-meta">${item.title}</div>
-                ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
-                ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
-            </div>
-            <div class="facility-distance">
-                <div class="distance-value">${formatDistance(d)}</div>
-                <div class="direction-compass">
-                    <i class="fa-solid fa-location-arrow compass-arrow" style="transform: rotate(${bearing - 45}deg);"></i>
-                    <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; opacity: 0.5;"></i>
+            </a>
+            
+            <a href="${mapUrl}" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
+                <div class="facility-details" style="flex: 1; min-width: 0;">
+                    <div class="facility-name">${config.name}</div>
+                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.title}</div>
+                    ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
+                    ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
                 </div>
-            </div>
-        </a>`;
+                <div class="facility-distance" style="margin-left: 0.5rem; text-align: right;">
+                    <div class="distance-value">${formatDistance(d)}</div>
+                    <div class="direction-compass">
+                        <i class="fa-solid fa-location-arrow compass-arrow" style="transform: rotate(${bearing - 45}deg);"></i>
+                        <i class="fa-solid fa-chevron-right" style="font-size: 0.7rem; opacity: 0.5;"></i>
+                    </div>
+                </div>
+            </a>
+        </div>`;
 }
 
 function renderResults(results, isDone = false) {
