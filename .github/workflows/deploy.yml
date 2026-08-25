@@ -27,26 +27,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check changed files
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            python:
+              - 'generate_data.py'
+              - '.github/workflows/deploy.yml'
+            node:
+              - 'fetch_events.js'
+              - 'package.json'
+              - '.github/workflows/deploy.yml'
+
       - name: Set up Python
+        if: steps.changes.outputs.python == 'true' || github.event_name != 'push'
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
       - name: Install Python dependencies
+        if: steps.changes.outputs.python == 'true' || github.event_name != 'push'
         run: pip install requests
 
       - name: Generate toronto_data.json
+        if: steps.changes.outputs.python == 'true' || github.event_name != 'push'
         run: python generate_data.py
 
       - name: Set up Node.js
+        if: steps.changes.outputs.node == 'true' || github.event_name != 'push'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install Node dependencies
-        run: npm ci
+        if: steps.changes.outputs.node == 'true' || github.event_name != 'push'
+        run: npm install
 
       - name: Fetch Toronto events
+        if: steps.changes.outputs.node == 'true' || github.event_name != 'push'
         run: node fetch_events.js
 
       - name: Upload Pages artifact
