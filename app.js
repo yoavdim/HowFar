@@ -549,18 +549,13 @@ function renderFacilityItem(config, results, isDone) {
             : `https://www.google.com/maps/dir/?api=1&destination=${item.origLat},${item.origLon}&travelmode=walking`;
 
     const isBike = config.id === 'bike-avail' || config.id === 'bike-dock';
-    const isTransit = config.id === 'ttc-subway' || config.id === 'ttc-streetcar';
-
-    // Bike Share Toronto's new official app package name
-    const bikeAppUrl = isAndroid 
-        ? 'intent://#Intent;package=com.lyft.android.bikesharetoronto;end' 
+    const isTransit = config.id.startsWith('ttc-');
+    const bikeAppUrl = isAndroid
+        ? 'intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.lyft.android.torontoapp;end'
         : 'https://bikesharetoronto.com/';
-        
-    // Deep links for Google Wallet / Apple Wallet
     const walletAppUrl = isAndroid
-        ? 'intent://#Intent;package=com.google.android.apps.walletnfcrel;end'
-        : 'shoebox://';
-
+        ? 'intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.google.android.apps.walletnfcrel;end'
+        : mapUrl;
     let iconHref = mapUrl;
     if (isAndroid || isIOS) {
         if (isBike) iconHref = bikeAppUrl;
