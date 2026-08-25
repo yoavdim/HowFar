@@ -1,4 +1,4 @@
-const CACHE_NAME = 'howfar-cache-v1';
+const CACHE_NAME = 'howfar-cache-v3';
 
 const CACHE_ASSETS = [
     './',
@@ -6,6 +6,7 @@ const CACHE_ASSETS = [
     './style.css',
     './app.js',
     './toronto_data.json',
+    './toronto_events.json',
     './manifest.json',
     './icon-192.png',
     './icon-512.png',

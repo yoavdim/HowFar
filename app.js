@@ -40,6 +40,8 @@ const facilitiesConfigs = [
     { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
     { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'other' },
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'other' },
+    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#10B981', group: 'other' },
+    { id: 'festival', name: 'Festival', icon: 'fa-masks-theater', color: '#8B5CF6', group: 'other' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
 ];
 
@@ -48,6 +50,7 @@ const facilityGroups = ['bikes', 'ttc', 'other'];
 let userLat = null;
 let userLon = null;
 let miniMap = null;
+
 
 function initMiniMap() {
     const mapEl = document.getElementById('mini-map');
@@ -192,6 +195,91 @@ function renderSkeletonCards() {
     }).join('');
 }
 
+// Pre-generated events data — produced daily by fetch_events.js via GitHub Actions.
+// Falls back to live CORS-proxied fetches if the file is unavailable (local dev).
+async function fetchLiveEvents() {
+    let npEvent = null;
+    let nearestFestival = null;
+
+    // Step 1: Try the pre-generated JSON (fast, same-origin, no CORS).
+    try {
+        const res = await fetch('toronto_events.json');
+        if (res.ok) {
+            const data = await res.json();
+
+            // NPS events — filter on-device so "today" is always current
+            const events = data.npSquare || [];
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayNames = [];
+            let nextStr = null;
+            let nextWeight = Infinity;
+            const months = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+
+            for (const ev of events) {
+                const s = new Date(ev.start + 'T12:00'); s.setHours(0, 0, 0, 0);
+                const e = new Date(ev.end + 'T12:00'); e.setHours(0, 0, 0, 0);
+                if (today >= s && today <= e) {
+                    if (!todayNames.includes(ev.name)) todayNames.push(ev.name);
+                } else if (s > today) {
+                    const w = (s.getMonth() + 1) * 100 + s.getDate();
+                    if (w < nextWeight) {
+                        nextWeight = w;
+                        const short = s.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+                        nextStr = `Next: ${ev.name} (${short})`;
+                    }
+                }
+            }
+            npEvent = todayNames.join(', ') || nextStr || null;
+
+            // Find nearest festival to user
+            if (data.festivals?.length && userLat && userLon) {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                let minDist = Infinity;
+                let bestActive = null;
+
+                for (const fb of data.festivals) {
+                    const start = new Date(fb.start + 'T12:00'); start.setHours(0, 0, 0, 0);
+                    const end = new Date(fb.end + 'T12:00'); end.setHours(0, 0, 0, 0);
+                    if (end < today) continue;
+                    const active = today >= start && today <= end;
+                    const dist = getDistance(userLat, userLon, fb.lat, fb.lon);
+                    if (active && dist < minDist) {
+                        minDist = dist;
+                        bestActive = fb;
+                    }
+                }
+
+                if (bestActive) {
+                    const d = getDistance(userLat, userLon, bestActive.lat, bestActive.lon);
+                    const dateStr = new Date(bestActive.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(bestActive.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+                    nearestFestival = { distance: d, origLat: bestActive.lat, origLon: bestActive.lon, title: `${bestActive.name} · ${dateStr}` };
+                } else {
+                    minDist = Infinity;
+                    for (const fb of data.festivals) {
+                        const start = new Date(fb.start + 'T12:00'); start.setHours(0, 0, 0, 0);
+                        if (start < today) continue;
+                        const dist = getDistance(userLat, userLon, fb.lat, fb.lon);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            const dateStr = new Date(fb.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(fb.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+                            nearestFestival = { distance: dist, origLat: fb.lat, origLon: fb.lon, title: `${fb.name} · ${dateStr}` };
+                        }
+                    }
+                }
+            }
+
+            console.log("Loaded pre-generated toronto_events.json");
+            return { npEvent, nearestFestival };
+        }
+    } catch (e) {
+        console.warn("toronto_events.json unavailable:", e.message);
+    }
+
+    return { npEvent: null, nearestFestival: null };
+}
+
 async function fetchAllData() {
     initWeather(userLat, userLon);
     const statusEl = document.getElementById('location-status');
@@ -236,6 +324,20 @@ async function fetchAllData() {
         if (data['tim-hortons']) {
             results['tim-hortons'] = findNearestOf(data['tim-hortons'], () => true);
         }
+
+        // Hardcoded municipal item — np-square is always available
+        results['np-square'] = {
+            origLat: 43.6534,
+            origLon: -79.3841,
+            distance: getDistance(userLat, userLon, 43.6534, -79.3841),
+            title: liveNpEvent || "Nothing today" 
+        };
+        
+        // Festival card: only set once events have been fetched, otherwise leave
+        // undefined so it renders as a skeleton (not "None found nearby").
+        if (liveFestival !== undefined) {
+            results['festival'] = liveFestival || null;
+        }
     };
 
     const render = () => renderResults(appResults, appDone);
@@ -277,7 +379,21 @@ async function fetchAllData() {
 
     const bikePromise = fetchBikeShareData(setBikeResults);
 
-    await Promise.allSettled([overpassPromise, bikePromise]);
+    let liveNpEvent = null;
+    let liveFestival;
+
+    const eventsPromise = (async () => {
+        const { npEvent, nearestFestival } = await fetchLiveEvents();
+        liveNpEvent = npEvent;
+        liveFestival = nearestFestival;
+        
+        if (appDone) {
+            computeCards();
+            render();
+        }
+    })();
+
+    await Promise.allSettled([overpassPromise, bikePromise, eventsPromise]);
 
     appDone = true;
     computeCards();
@@ -557,7 +673,9 @@ function renderFacilityItem(config, results, isDone) {
         ? 'intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.google.android.apps.walletnfcrel;end'
         : mapUrl;
     let iconHref = mapUrl;
-    if (isAndroid || isIOS) {
+    if (config.id === 'np-square') {
+        iconHref = "https://www.toronto.ca/services-payments/venues-facilities-bookings/booking-city-facilities/city-squares/nathan-phillips-square/events-happening-on-nathan-phillips-square/";
+    } else if (isAndroid || isIOS) {
         if (isBike) iconHref = bikeAppUrl;
         else if (isTransit) iconHref = walletAppUrl;
     }
@@ -570,7 +688,7 @@ function renderFacilityItem(config, results, isDone) {
             
             <a href="${mapUrl}" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
                 <div class="facility-details" style="flex: 1; min-width: 0;">
-                    <div class="facility-name">${config.name}</div>
+                    <div class="facility-name">${item.overrideName || config.name}</div>
                     <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.title}</div>
                     ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
                     ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
