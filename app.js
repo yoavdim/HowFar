@@ -214,7 +214,6 @@ async function fetchLiveEvents() {
             const todayNames = [];
             let nextStr = null;
             let nextWeight = Infinity;
-            const months = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
 
             for (const ev of events) {
                 const s = new Date(ev.start + 'T12:00'); s.setHours(0, 0, 0, 0);
@@ -231,6 +230,12 @@ async function fetchLiveEvents() {
                 }
             }
             npEvent = todayNames.join(', ') || nextStr || null;
+
+            if (data.lastUpdated) {
+                const date = new Date(data.lastUpdated);
+                const el = document.getElementById('events-updated-text');
+                if (el) el.textContent = `Events updated: ${date.toLocaleString()}`;
+            }
 
             // Find nearest festival to user
             if (data.festivals?.length && userLat && userLon) {

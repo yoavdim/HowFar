@@ -7,6 +7,7 @@ import zipfile
 import csv
 import io
 import os
+import sys
 import time
 
 def process_gtfs():
@@ -140,36 +141,59 @@ def fetch_overpass_grid():
     d_lon = (lon_max - lon_min) / 5
     
     all_elements = []
+    failed = []
+
+    def make_query(bbox):
+        return f"""[out:json];
+        (
+            nwr["railway"="station"]["network"~"TTC"]({bbox});
+            nwr["railway"="station"]["operator"~"TTC"]({bbox});
+            nwr["amenity"="library"]({bbox});
+            nwr["brand"~"Tim Hortons",i]({bbox});
+            nwr["name"~"Tim Hortons",i]({bbox});
+        );
+        out center;"""
+
+    def try_fetch(bbox, label=""):
+        q = make_query(bbox)
+        print(f"{label}Fetching POIs in {bbox}...")
+        try:
+            r = requests.post("https://overpass.private.coffee/api/interpreter", data={'data': q}, headers=headers, timeout=65)
+            if r.status_code == 200:
+                elements = r.json().get("elements", [])
+                all_elements.extend(elements)
+                print(f"  -> {len(elements)} results")
+                return True
+            else:
+                print(f"  -> HTTP {r.status_code}")
+        except Exception as e:
+            print(f"  -> Error: {e}")
+        return False
+
     for i in range(5):
         for j in range(5):
             b_lat_min = lat_min + i * d_lat
-            b_lat_max = b_lat_min + d_lat
             b_lon_min = lon_min + j * d_lon
-            b_lon_max = b_lon_min + d_lon
-            bbox = f"{b_lat_min:.3f},{b_lon_min:.3f},{b_lat_max:.3f},{b_lon_max:.3f}"
-            
-            q = f"""[out:json];
-            (
-                nwr["railway"="station"]["network"~"TTC"]({bbox});
-                nwr["railway"="station"]["operator"~"TTC"]({bbox});
-                nwr["amenity"="library"]({bbox});
-                nwr["brand"~"Tim Hortons",i]({bbox});
-                nwr["name"~"Tim Hortons",i]({bbox});
-            );
-            out center;"""
-            
-            print(f"Fetching POIs in {bbox}...")
-            try:
-                r = requests.post("https://overpass.private.coffee/api/interpreter", data={'data': q}, headers=headers, timeout=65)
-                if r.status_code == 200:
-                    all_elements.extend(r.json().get("elements", []))
-            except Exception as e:
-                print(f"Error on {bbox}: {e}")
-            time.sleep(1)
-            
+            bbox = f"{b_lat_min:.3f},{b_lon_min:.3f},{b_lat_min + d_lat:.3f},{b_lon_min + d_lon:.3f}"
+            if not try_fetch(bbox):
+                failed.append(bbox)
+            time.sleep(5)
+
+    # Retry failed cells after a pause
+    still_failed = []
+    if failed:
+        print(f"\nRetrying {len(failed)} failed cells after 180s...")
+        time.sleep(180)
+        for bbox in failed:
+            if not try_fetch(bbox, label="[retry] "):
+                still_failed.append(bbox)
+            time.sleep(5)
+        if still_failed:
+            print(f"Warning: {len(still_failed)} cells still failed after retry")
+
     # Deduplicate elements by ID
     dedup = {e['id']: e for e in all_elements}.values()
-    return list(dedup)
+    return list(dedup), still_failed
 
 def clean_element(e):
     lat = e.get("lat")
@@ -210,8 +234,12 @@ def main():
     print(f"Parks Processing Complete: {len(park_ways)} parks retrieved.")
     
     # 3. Fetch other POIs via Overpass
-    elements = fetch_overpass_grid()
+    elements, overpass_failures = fetch_overpass_grid()
     print(f"Overpass Processing Complete: {len(elements)} total POIs retrieved.")
+    
+    if overpass_failures:
+        print(f"ERROR: {len(overpass_failures)} grid cells failed after retry. Aborting — not overwriting toronto_data.json")
+        sys.exit(1)
     
     
     # Organize data
