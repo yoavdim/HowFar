@@ -27,55 +27,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check changed files
-        uses: dorny/paths-filter@v3
-        id: changes
-        with:
-          filters: |
-            python:
-              - 'generate_data.py'
-              - '.github/workflows/deploy.yml'
-            node:
-              - 'fetch_events.js'
-              - 'package.json'
-              - '.github/workflows/deploy.yml'
-
-      - name: Set up Python
-        if: steps.changes.outputs.python == 'true' || github.event_name != 'push'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install Python dependencies
-        if: steps.changes.outputs.python == 'true' || github.event_name != 'push'
-        run: pip install requests
-
-      - name: Restore cached toronto_data.json
-        uses: actions/cache@v4
-        with:
-          path: toronto_data.json
-          key: toronto-data
-
-      - name: Generate toronto_data.json
-        if: steps.changes.outputs.python == 'true' || github.event_name != 'push'
-        run: python generate_data.py
-        continue-on-error: true
-
-      - name: Cache toronto_data.json
-        if: (steps.changes.outputs.python == 'true' || github.event_name != 'push') && hashFiles('toronto_data.json') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: toronto_data.json
-          key: toronto-data
-
       - name: Set up Node.js
-        if: steps.changes.outputs.node == 'true' || github.event_name != 'push'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install Node dependencies
-        if: steps.changes.outputs.node == 'true' || github.event_name != 'push'
         run: npm install
 
       - name: Restore cached toronto_events.json
@@ -85,11 +42,10 @@ jobs:
           key: toronto-events
 
       - name: Fetch Toronto events
-        if: steps.changes.outputs.node == 'true' || github.event_name != 'push'
         run: node fetch_events.js
 
       - name: Cache toronto_events.json
-        if: (steps.changes.outputs.node == 'true' || github.event_name != 'push') && hashFiles('toronto_events.json') != ''
+        if: hashFiles('toronto_events.json') != ''
         uses: actions/cache/save@v4
         with:
           path: toronto_events.json
