@@ -241,7 +241,7 @@ body {
 }
 
 .menu-dropdown {
-    position: absolute;
+    position: fixed;
     top: 4.9rem;
     right: 2rem;
     z-index: 160;
@@ -615,4 +615,10 @@ body {
 
 .footer-links a:hover {
     color: var(--accent-color);
+}
+
+@media (min-width: 600px) {
+    .menu-dropdown {
+        right: calc(50% - 300px + 2rem);
+    }
 }
