@@ -39,17 +39,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: toronto_events.json
-          key: toronto-events
+          key: toronto-events-${{ github.run_id }}
+          restore-keys: |
+            toronto-events-
 
       - name: Fetch Toronto events
         run: node fetch_events.js
 
       - name: Cache toronto_events.json
-        if: hashFiles('toronto_events.json') != ''
         uses: actions/cache/save@v4
         with:
           path: toronto_events.json
-          key: toronto-events
+          key: toronto-events-${{ github.run_id }}
 
       - name: Allow toronto_events.json to be deployed
         run: sed -i '/toronto_events.json/d' .gitignore

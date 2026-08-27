@@ -250,6 +250,10 @@ async function main() {
 
 main().catch(e => {
     console.error("Fatal error:", e);
+    if (fs.existsSync('toronto_events.json')) {
+        console.log("Preserving cached toronto_events.json from a previous successful run.");
+        process.exit(0);
+    }
     // Write a minimal fallback so the app still has something
     const fallback = {
         lastUpdated: new Date().toISOString(),
