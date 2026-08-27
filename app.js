@@ -40,7 +40,7 @@ const facilitiesConfigs = [
     { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
     { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'other' },
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'other' },
-    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#10B981', group: 'other' },
+    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'other' },
     { id: 'festival', name: 'Festival', icon: 'fa-masks-theater', color: '#8B5CF6', group: 'other' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
 ];
@@ -145,26 +145,70 @@ function updateLocationStatus(msg, statusClass = "") {
 
 async function initWeather(lat, lon) {
     try {
-        // Fetch weather for live location
-        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
-        const data = await res.json();
+        const [weatherRes, aqiRes] = await Promise.all([
+            fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&hourly=precipitation,weathercode&forecast_hours=12&current=uv_index`),
+            fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=us_aqi`).catch(() => null)
+        ]);
+        const data = await weatherRes.json();
+        
+        let aqiData = null;
+        if (aqiRes && aqiRes.ok) {
+            aqiData = await aqiRes.json();
+        }
 
         const temp = Math.round(data.current_weather.temperature);
         document.getElementById('temp-value').textContent = temp;
         document.getElementById('temp-value-bar').textContent = temp;
 
-        // Simple weather description based on weathercode
         const code = data.current_weather.weathercode;
         const iconEl = document.getElementById('weather-icon');
         const iconBarEl = document.getElementById('weather-icon-bar');
         const descEl = document.getElementById('weather-desc');
 
         let iconClass, desc;
-        if (code === 0)                         { iconClass = 'fa-solid fa-sun';        desc = 'Clear sky'; }
-        else if (code >= 1 && code <= 3)        { iconClass = 'fa-solid fa-cloud-sun';  desc = 'Partly cloudy'; }
-        else if (code >= 51 && code <= 67)      { iconClass = 'fa-solid fa-cloud-rain'; desc = 'Rain'; }
-        else if (code >= 71 && code <= 82)      { iconClass = 'fa-solid fa-snowflake';  desc = 'Snow'; }
-        else                                    { iconClass = 'fa-solid fa-cloud';       desc = 'Cloudy'; }
+        if (code === 0)                                                      { iconClass = 'fa-solid fa-sun';        desc = 'Clear sky'; }
+        else if (code >= 1 && code <= 3)                                     { iconClass = 'fa-solid fa-cloud-sun';  desc = 'Partly cloudy'; }
+        else if (code === 45 || code === 48)                                 { iconClass = 'fa-solid fa-smog';       desc = 'Fog'; }
+        else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82))   { iconClass = 'fa-solid fa-cloud-rain'; desc = 'Rain'; }
+        else if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86))   { iconClass = 'fa-solid fa-snowflake';  desc = 'Snow'; }
+        else if (code >= 95)                                                 { iconClass = 'fa-solid fa-cloud-bolt'; desc = 'Thunderstorm'; }
+        else                                                                 { iconClass = 'fa-solid fa-cloud';      desc = 'Cloudy'; }
+
+        const uvIndex = data.current?.uv_index || 0;
+        const aqi = aqiData?.current?.us_aqi || 0;
+        
+        let alerts = [];
+        if (uvIndex >= 8) alerts.push("High UV");
+        if (aqi >= 150) alerts.push("Poor Air");
+
+        // Check for upcoming precipitation changes
+        if (data.hourly && data.hourly.precipitation) {
+            if (code < 51) {
+                // Currently clear/cloudy, check when it starts (using 0.2mm tolerance)
+                for (let i = 1; i <= 6 && i < data.hourly.precipitation.length; i++) {
+                    if (data.hourly.precipitation[i] >= 0.2) {
+                        const hCode = data.hourly.weathercode[i];
+                        const isSnow = ((hCode >= 71 && hCode <= 77) || (hCode >= 85 && hCode <= 86));
+                        const isStorm = (hCode >= 95);
+                        const precipType = isStorm ? 'Storm' : isSnow ? 'Snow' : 'Rain';
+                        alerts.push(`${precipType} in ${i}h`);
+                        break;
+                    }
+                }
+            } else {
+                // Currently raining/snowing, check when it stops (drops below 0.2mm)
+                for (let i = 1; i <= 6 && i < data.hourly.precipitation.length; i++) {
+                    if (data.hourly.precipitation[i] < 0.2) {
+                        alerts.push(`Stopping in ${i}h`);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (alerts.length > 0) {
+            desc += ` — ${alerts.join(', ')}`;
+        }
 
         iconEl.className = iconClass;
         iconBarEl.className = iconClass;
@@ -229,7 +273,10 @@ async function fetchLiveEvents() {
                     }
                 }
             }
-            npEvent = todayNames.join(', ') || nextStr || null;
+            npEvent = {
+                title: todayNames.join(', ') || nextStr || null,
+                isActive: todayNames.length > 0
+            };
 
             if (data.lastUpdated) {
                 const date = new Date(data.lastUpdated);
@@ -259,7 +306,7 @@ async function fetchLiveEvents() {
                 if (bestActive) {
                     const d = getDistance(userLat, userLon, bestActive.lat, bestActive.lon);
                     const dateStr = new Date(bestActive.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(bestActive.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                    nearestFestival = { distance: d, origLat: bestActive.lat, origLon: bestActive.lon, title: `${bestActive.name} · ${dateStr}` };
+                    nearestFestival = { distance: d, origLat: bestActive.lat, origLon: bestActive.lon, title: `${bestActive.name} · ${dateStr}`, isActive: true };
                 } else {
                     minDist = Infinity;
                     for (const fb of data.festivals) {
@@ -335,7 +382,8 @@ async function fetchAllData() {
             origLat: 43.6534,
             origLon: -79.3841,
             distance: getDistance(userLat, userLon, 43.6534, -79.3841),
-            title: liveNpEvent || "Nothing today" 
+            title: liveNpEvent?.title || "Nothing today",
+            isActive: liveNpEvent?.isActive || false
         };
         
         // Festival card: only set once events have been fetched, otherwise leave
@@ -694,7 +742,7 @@ function renderFacilityItem(config, results, isDone) {
             <a href="${mapUrl}" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
                 <div class="facility-details" style="flex: 1; min-width: 0;">
                     <div class="facility-name">${item.overrideName || config.name}</div>
-                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.title}</div>
+                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${item.isActive ? 'color: var(--success-color); font-weight: 500;' : ''}">${item.title}</div>
                     ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
                     ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
                 </div>
