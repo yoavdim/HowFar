@@ -27,6 +27,7 @@ function getBearing(lat1, lon1, lat2, lon2) {
 }
 
 function formatDistance(meters) {
+    if (meters == null) return '--';
     if (meters < 1000) return `${Math.round(meters)} m`;
     return `${(meters / 1000).toFixed(1)} km`;
 }
@@ -40,6 +41,7 @@ const facilitiesConfigs = [
     { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
     { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'other' },
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'other' },
+    { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'other' },
     { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'other' },
     { id: 'festival', name: 'Festival', icon: 'fa-masks-theater', color: '#8B5CF6', group: 'other' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
@@ -244,6 +246,7 @@ function renderSkeletonCards() {
 async function fetchLiveEvents() {
     let npEvent = null;
     let nearestFestival = null;
+    let nearestSkating = null;
 
     // Step 1: Try the pre-generated JSON (fast, same-origin, no CORS).
     try {
@@ -256,7 +259,8 @@ async function fetchLiveEvents() {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const todayNames = [];
-            let nextStr = null;
+            let nextTitle = null;
+            let nextSubtitle = null;
             let nextWeight = Infinity;
 
             for (const ev of events) {
@@ -268,13 +272,14 @@ async function fetchLiveEvents() {
                     const w = (s.getMonth() + 1) * 100 + s.getDate();
                     if (w < nextWeight) {
                         nextWeight = w;
-                        const short = s.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                        nextStr = `Next: ${ev.name} (${short})`;
+                        nextSubtitle = s.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+                        nextTitle = ev.name;
                     }
                 }
             }
             npEvent = {
-                title: todayNames.join(', ') || nextStr || null,
+                title: todayNames.length > 0 ? todayNames.join(', ') : (nextTitle || null),
+                subtitle: todayNames.length > 0 ? "Today" : (nextSubtitle || null),
                 isActive: todayNames.length > 0
             };
 
@@ -306,7 +311,7 @@ async function fetchLiveEvents() {
                 if (bestActive) {
                     const d = getDistance(userLat, userLon, bestActive.lat, bestActive.lon);
                     const dateStr = new Date(bestActive.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(bestActive.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                    nearestFestival = { distance: d, origLat: bestActive.lat, origLon: bestActive.lon, title: `${bestActive.name} · ${dateStr}`, isActive: true };
+                    nearestFestival = { distance: d, origLat: bestActive.lat, origLon: bestActive.lon, title: bestActive.name, subtitle: dateStr, isActive: true };
                 } else {
                     minDist = Infinity;
                     for (const fb of data.festivals) {
@@ -316,20 +321,52 @@ async function fetchLiveEvents() {
                         if (dist < minDist) {
                             minDist = dist;
                             const dateStr = new Date(fb.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(fb.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                            nearestFestival = { distance: dist, origLat: fb.lat, origLon: fb.lon, title: `${fb.name} · ${dateStr}` };
+                            nearestFestival = { distance: dist, origLat: fb.lat, origLon: fb.lon, title: fb.name, subtitle: dateStr };
                         }
                     }
                 }
             }
 
+            // Find nearest active skating
+            if (data.skating?.length && userLat && userLon) {
+                const todayStr = today.toISOString().split('T')[0];
+                const validSessions = data.skating.filter(sk => 
+                    sk.date >= todayStr && (!sk.isAdult || getAdultSkatePref())
+                );
+                
+                if (validSessions.length > 0) {
+                    // Sort by date ascending, then by distance
+                    validSessions.sort((a, b) => {
+                        if (a.date < b.date) return -1;
+                        if (a.date > b.date) return 1;
+                        const distA = getDistance(userLat, userLon, a.lat, a.lon);
+                        const distB = getDistance(userLat, userLon, b.lat, b.lon);
+                        return distA - distB;
+                    });
+                    
+                    const best = validSessions[0];
+                    const isToday = best.date === todayStr;
+                    const dateDisplay = isToday ? '' : `(${new Date(best.date + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}) `;
+
+                    nearestSkating = {
+                        distance: getDistance(userLat, userLon, best.lat, best.lon),
+                        origLat: best.lat,
+                        origLon: best.lon,
+                        title: `${dateDisplay}${best.start} – ${best.end}`,
+                        overrideName: best.name,
+                        isActive: isToday
+                    };
+                }
+            }
+
             console.log("Loaded pre-generated toronto_events.json");
-            return { npEvent, nearestFestival };
+            return { npEvent, nearestFestival, nearestSkating };
         }
     } catch (e) {
         console.warn("toronto_events.json unavailable:", e.message);
     }
 
-    return { npEvent: null, nearestFestival: null };
+    return { npEvent: null, nearestFestival: null, nearestSkating: null };
 }
 
 async function fetchAllData() {
@@ -378,18 +415,39 @@ async function fetchAllData() {
         }
 
         // Hardcoded municipal item — np-square is always available
-        results['np-square'] = {
-            origLat: 43.6534,
-            origLon: -79.3841,
-            distance: getDistance(userLat, userLon, 43.6534, -79.3841),
-            title: liveNpEvent?.title || "Nothing today",
-            isActive: liveNpEvent?.isActive || false
-        };
+        if (liveNpEvent !== undefined) {
+            results['np-square'] = {
+                origLat: 43.6534,
+                origLon: -79.3841,
+                distance: getDistance(userLat, userLon, 43.6534, -79.3841),
+                title: liveNpEvent?.title || "Nothing today",
+                subtitle: liveNpEvent?.subtitle || null,
+                isActive: liveNpEvent?.isActive || false
+            };
+        }
         
         // Festival card: only set once events have been fetched, otherwise leave
         // undefined so it renders as a skeleton (not "None found nearby").
         if (liveFestival !== undefined) {
             results['festival'] = liveFestival || null;
+        }
+
+        // Skating card: like festival, wait for fetch.
+        if (liveSkating !== undefined) {
+            if (liveSkating) {
+                results['skating'] = {
+                    distance: liveSkating.distance,
+                    title: liveSkating.overrideName,
+                    subtitle: liveSkating.title,
+                    isActive: liveSkating.isActive
+                };
+            } else {
+                results['skating'] = {
+                    distance: null,
+                    title: "No drop-in today",
+                    isActive: false
+                };
+            }
         }
     };
 
@@ -433,12 +491,14 @@ async function fetchAllData() {
     const bikePromise = fetchBikeShareData(setBikeResults);
 
     let liveNpEvent = null;
-    let liveFestival;
+    let liveFestival = null;
+    let liveSkating = null;
 
     const eventsPromise = (async () => {
-        const { npEvent, nearestFestival } = await fetchLiveEvents();
+        const { npEvent, nearestFestival, nearestSkating } = await fetchLiveEvents();
         liveNpEvent = npEvent;
         liveFestival = nearestFestival;
+        liveSkating = nearestSkating;
         
         if (appDone) {
             computeCards();
@@ -484,6 +544,21 @@ let currentBikes = null;
 
 // Bike preference: 'regular' | 'electric' | 'both'
 const BIKE_TYPE_KEY = 'howfar-bike-type';
+const ADULT_SKATE_KEY = 'howfar-adult-skate';
+
+function getAdultSkatePref() {
+    try {
+        return localStorage.getItem(ADULT_SKATE_KEY) === 'true';
+    } catch (e) {
+        return false;
+    }
+}
+
+function setAdultSkatePref(val) {
+    try {
+        localStorage.setItem(ADULT_SKATE_KEY, val);
+    } catch (e) { }
+}
 
 function getBikeTypePref() {
     try {
@@ -575,11 +650,24 @@ function initMenu() {
         const type = opt.dataset.bikeType;
         setBikeTypePref(type);
         setActive(type);
-        if (currentBikes) {
+        if (appResults && Object.keys(appResults).length > 0) {
             computeBikeResults(appResults);
-            renderResults(appResults, appDone);
+            renderResults(appResults, true);
         }
     }));
+
+    const adultToggle = document.getElementById('adult-skate-toggle');
+    adultToggle.checked = getAdultSkatePref();
+    adultToggle.addEventListener('change', async () => {
+        setAdultSkatePref(adultToggle.checked);
+        if (appResults && Object.keys(appResults).length > 0) {
+            const { nearestSkating: sk } = await fetchLiveEvents();
+            appResults['skating'] = sk 
+                ? { distance: sk.distance, title: sk.overrideName, subtitle: sk.title, isActive: sk.isActive }
+                : { distance: null, title: "No drop-in today", isActive: false };
+            renderResults(appResults, true);
+        }
+    });
 
     const clearBtn = dropdown.querySelector('#clear-cache-btn');
     if (clearBtn) {
@@ -724,29 +812,37 @@ function renderFacilityItem(config, results, isDone) {
         : 'https://bikesharetoronto.com/';
     const walletAppUrl = isAndroid
         ? 'intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=com.google.android.apps.walletnfcrel;end'
-        : mapUrl;
-    let iconHref = mapUrl;
+        : null;
+
+    let iconHref = null;
     if (config.id === 'np-square') {
         iconHref = "https://www.toronto.ca/services-payments/venues-facilities-bookings/booking-city-facilities/city-squares/nathan-phillips-square/events-happening-on-nathan-phillips-square/";
+    } else if (config.id === 'skating') {
+        iconHref = "https://www.toronto.ca/explore-enjoy/parks-recreation/program-activities/ice-snow-activities/public-leisure-skating/";
     } else if (isAndroid || isIOS) {
         if (isBike) iconHref = bikeAppUrl;
         else if (isTransit) iconHref = walletAppUrl;
     }
 
+    const iconStyles = `color: ${config.color}; padding: 1.1rem 1rem 1.1rem 1.25rem; margin-right: 1rem; text-decoration: none; display: flex; align-items: center; justify-content: center;`;
+    const iconHtml = `<i class="fa-solid ${config.icon}"></i>`;
+
     return `
         <div class="facility-item" style="padding: 0; display: flex;">
-            <a href="${iconHref}" class="facility-icon" style="color: ${config.color}; padding: 1.1rem 1rem 1.1rem 1.25rem; margin-right: 1rem; text-decoration: none;">
-                <i class="fa-solid ${config.icon}"></i>
-            </a>
+            ${iconHref 
+                ? `<a href="${iconHref}" target="_blank" class="facility-icon" style="${iconStyles}">${iconHtml}</a>` 
+                : `<div class="facility-icon" style="${iconStyles}">${iconHtml}</div>`
+            }
             
             <a href="${mapUrl}" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
                 <div class="facility-details" style="flex: 1; min-width: 0;">
                     <div class="facility-name">${item.overrideName || config.name}</div>
-                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${item.isActive ? 'color: var(--success-color); font-weight: 500;' : ''}">${item.title}</div>
+                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${item.isActive && config.id !== 'skating' ? 'color: var(--success-color); font-weight: 500;' : ''}">${item.title}</div>
+                    ${item.subtitle ? `<div class="facility-status" style="${item.isActive && config.id === 'skating' ? 'color: var(--success-color); font-weight: 500;' : 'color: var(--text-secondary); font-weight: 400;'}">${item.subtitle}</div>` : ''}
                     ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
                     ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
                 </div>
-                <div class="facility-distance" style="margin-left: 0.5rem; text-align: right;">
+                <div class="facility-distance" style="margin-left: 0.5rem; text-align: right; ${d == null ? 'opacity: 0;' : ''}">
                     <div class="distance-value">${formatDistance(d)}</div>
                     <div class="direction-compass">
                         <i class="fa-solid fa-location-arrow compass-arrow" style="transform: rotate(${bearing - 45}deg);"></i>

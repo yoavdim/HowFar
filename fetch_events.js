@@ -167,12 +167,72 @@ async function fetchCkanFestivals() {
     }
 }
 
+async function fetchSkating() {
+    try {
+        console.log("Fetching ArcGIS Skate Locations...");
+        const locRes = await fetch("https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services/Skate_Locations_v2/FeatureServer/0/query?f=json&where=1=1&returnGeometry=true&outFields=locationid,location&outSR=4326&resultRecordCount=2000");
+        const locBody = await locRes.json();
+        
+        const locMap = {};
+        for (const feature of locBody.features || []) {
+            const locId = feature.attributes.locationid;
+            const name = feature.attributes.location;
+            const lon = feature.geometry?.x;
+            const lat = feature.geometry?.y;
+            if (locId && lat && lon) {
+                locMap[locId] = { name, lat, lon };
+            }
+        }
+
+        console.log("Fetching CKAN drop-in dataset metadata...");
+        const metaRes = await fetch("https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=registered-programs-and-drop-in-courses-offering");
+        const metaBody = await metaRes.json();
+        const dropInRes = metaBody.result.resources.find(r => r.name === 'Drop-in.json');
+
+        console.log("Fetching actual Drop-in schedules...");
+        const dropRes = await fetch(dropInRes.url);
+        const dropIns = await dropRes.json();
+        
+        const todayStr = new Date().toISOString().split('T')[0];
+        const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+        const activeSkating = [];
+
+        for (const course of dropIns) {
+            if (course["Course Title"] && course["Course Title"].includes("Leisure Skate")) {
+                if ((course["Age Min"] == 0 || course["Age Min"] == 19) && (course["Age Max"] == "None" || course["Age Max"] >= 99)) {
+                    if (course["Last Date"] && course["Last Date"] >= todayStr) {
+                        const loc = locMap[course["Location ID"]];
+                        if (loc) {
+                            activeSkating.push({
+                                name: loc.name,
+                                lat: loc.lat,
+                                lon: loc.lon,
+                                date: course["First Date"],
+                                start: `${course["Start Hour"]}:${String(course["Start Minute"]).padStart(2, '0')}`,
+                                end: `${course["End Hour"]}:${String(course["End Min"]).padStart(2, '0')}`,
+                                isAdult: course["Age Min"] == 19
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        console.log(`Skating: found ${activeSkating.length} drop-in sessions upcoming`);
+        return activeSkating;
+    } catch (e) {
+        console.warn("Skating fetch failed:", e.message);
+        return [];
+    }
+}
+
 async function main() {
     console.log("--- HowFar Events Fetcher ---");
 
-    const [npsData, ckanFestivals] = await Promise.all([
+    const [npsData, ckanFestivals, skatingData] = await Promise.all([
         fetchNpsEvents(),
-        fetchCkanFestivals()
+        fetchCkanFestivals(),
+        fetchSkating()
     ]);
 
     const festivals = ckanFestivals || HARDCODED_FESTIVALS;
@@ -180,7 +240,8 @@ async function main() {
     const output = {
         lastUpdated: new Date().toISOString(),
         npSquare: npsData,
-        festivals
+        festivals,
+        skating: skatingData
     };
 
     fs.writeFileSync('toronto_events.json', JSON.stringify(output, null, 0));
@@ -193,7 +254,8 @@ main().catch(e => {
     const fallback = {
         lastUpdated: new Date().toISOString(),
         npSquare: [],
-        festivals: HARDCODED_FESTIVALS
+        festivals: HARDCODED_FESTIVALS,
+        skating: []
     };
     fs.writeFileSync('toronto_events.json', JSON.stringify(fallback, null, 0));
     process.exit(0); // don't fail the workflow — fallback data is still useful
