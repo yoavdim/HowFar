@@ -47,10 +47,12 @@
             // Find the closest anchor tag that was clicked
             var link = e.target.closest("a");
             if (link && link.href) {
+                var navType = link.getAttribute("data-nav-type");
+
+                // 1. Analytics Tracking
                 if (window.goatcounter && window.goatcounter.count) {
                     // Use the link's hostname and pathname to build the event name
                     var linkTarget = link.hostname + link.pathname;
-                    var navType = link.getAttribute("data-nav-type");
                     if (navType) {
                         // Facility navigation card: track type + card name, never the GPS/URL
                         linkTarget = navType + ' · ' + (link.getAttribute("data-name") || 'facility');
@@ -60,6 +62,13 @@
                         title: 'Link Clicked: ' + linkTarget,
                         event: true
                     });
+                }
+
+                // 2. Mobile Deep Link Routing
+                if (navType === 'android' || navType === 'ios') {
+                    e.preventDefault();
+                    // Try to open the app intent natively
+                    window.location.href = link.href;
                 }
             }
         });

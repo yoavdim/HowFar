@@ -826,15 +826,16 @@ function renderFacilityItem(config, results, isDone) {
 
     const iconStyles = `color: ${config.color}; padding: 1.1rem 1rem 1.1rem 1.25rem; margin-right: 1rem; text-decoration: none; display: flex; align-items: center; justify-content: center;`;
     const iconHtml = `<i class="fa-solid ${config.icon}"></i>`;
+    const targetAttr = (!isAndroid && !isIOS) ? 'target="_blank"' : '';
 
     return `
         <div class="facility-item" style="padding: 0; display: flex;">
             ${iconHref 
-                ? `<a href="${iconHref}" target="_blank" class="facility-icon" style="${iconStyles}">${iconHtml}</a>` 
-                : `<div class="facility-icon" style="${iconStyles}">${iconHtml}</div>`
+                ? `<a href="${iconHref}" ${targetAttr} class="facility-icon" style="${iconStyles}">${iconHtml}</a>` 
+                : `<div class="facility-icon" style="${iconStyles}" onclick="event.preventDefault(); event.stopPropagation();">${iconHtml}</div>`
             }
             
-            <a href="${mapUrl}" data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
+            <a href="${mapUrl}" ${targetAttr} data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
                 <div class="facility-details" style="flex: 1; min-width: 0;">
                     <div class="facility-name">${item.overrideName || config.name}</div>
                     <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${item.isActive && config.id !== 'skating' ? 'color: var(--success-color); font-weight: 500;' : ''}">${item.title}</div>

@@ -51,6 +51,9 @@ jobs:
           path: toronto_events.json
           key: toronto-events
 
+      - name: Allow toronto_events.json to be deployed
+        run: sed -i '/toronto_events.json/d' .gitignore
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
