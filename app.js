@@ -39,15 +39,15 @@ const facilitiesConfigs = [
     { id: 'ttc-metro', name: 'TTC Metro Station', icon: 'fa-train-subway', color: '#EF4444', group: 'ttc' },
     { id: 'ttc-streetcar-ns', name: 'Streetcar (North/South)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
     { id: 'ttc-streetcar-ew', name: 'Streetcar (East/West)', icon: 'fa-train-tram', color: '#EF4444', group: 'ttc' },
-    { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'other' },
-    { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'other' },
-    { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'other' },
+    { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'facilities' },
+    { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'facilities' },
+    { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'facilities' },
     { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'other' },
     { id: 'festival', name: 'Festival', icon: 'fa-masks-theater', color: '#8B5CF6', group: 'other' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
 ];
 
-const facilityGroups = ['bikes', 'ttc', 'other'];
+const facilityGroups = ['bikes', 'ttc', 'facilities', 'other'];
 
 let userLat = null;
 let userLon = null;
@@ -60,7 +60,7 @@ function initMiniMap() {
 
     miniMap = L.map(mapEl, { zoomControl: false, scrollWheelZoom: false }).setView([userLat, userLon], 15);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_2hd6_1_8868477b9bb66d052fc89b3d', {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
     }).addTo(miniMap);
@@ -100,13 +100,17 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error("IP Geolocation failed", e);
         }
 
-        updateLocationStatus("Could not determine location. Please enable GPS or use HTTPS.", "error");
+        updateLocationStatus("Could not determine location, defaulting to CN Tower", "error");
+        userLat = 43.6426;
+        userLon = -79.3871;
+        initMiniMap();
+        fetchAllData();
     };
 
     if ("geolocation" in navigator) {
         const timeoutId = setTimeout(() => {
             fallbackLocation();
-        }, 15000);
+        }, 3000);
 
         navigator.geolocation.getCurrentPosition(
             (position) => {
@@ -125,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn("GPS Error:", error);
                 fallbackLocation();
             },
-            { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 3000 }
         );
     } else {
         fallbackLocation();
@@ -369,7 +373,62 @@ async function fetchLiveEvents() {
     return { npEvent: null, nearestFestival: null, nearestSkating: null };
 }
 
+async function resolveLocationName(lat, lon) {
+    const el = document.getElementById('weather-loc-text');
+    if (!el) return;
+    
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1&zoom=18`, {
+            headers: {
+                'Accept-Language': 'en-US,en;q=0.9'
+            }
+        });
+        
+        if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const data = await res.json();
+        console.log("Geocoding result:", data);
+        const address = data.address;
+        
+        if (!address) {
+            console.warn("No address found in geocoding data, defaulting to Toronto");
+            el.textContent = 'Toronto';
+            return;
+        }
+
+        let locName = 'Unknown Location';
+        const isToronto = address.city === 'Toronto' || address.municipality === 'Toronto';
+        
+        if (!isToronto) {
+            locName = address.city || address.town || address.village || address.county || 'Unknown Area';
+        } else {
+            const specificKeys = ['neighbourhood', 'city_block', 'quarter', 'suburb', 'city_district'];
+            for (const key of specificKeys) {
+                if (address[key]) {
+                    locName = address[key];
+                    break;
+                }
+            }
+            if (locName === 'Unknown Location') {
+                locName = 'Toronto'; 
+            }
+        }
+        
+        if (locName === 'Church-Wellesley') {
+            locName += ' 🏳️‍🌈';
+        }
+        
+        el.textContent = locName;
+    } catch (e) {
+        console.warn("Reverse geocoding failed", e);
+        el.textContent = 'Toronto'; // Graceful fallback
+    }
+}
+
 async function fetchAllData() {
+    resolveLocationName(userLat, userLon);
     initWeather(userLat, userLon);
     const statusEl = document.getElementById('location-status');
     const results = appResults = {};
@@ -511,7 +570,9 @@ async function fetchAllData() {
     appDone = true;
     computeCards();
     render();
-    statusEl.style.display = 'none';
+    if (statusEl && !statusEl.classList.contains('error')) {
+        statusEl.style.display = 'none';
+    }
 }
 
 // --- Local cache helpers ---
@@ -544,6 +605,22 @@ let currentBikes = null;
 
 // Bike preference: 'regular' | 'electric' | 'both'
 const BIKE_TYPE_KEY = 'howfar-bike-type';
+const HIDE_TTC_KEY = 'howfar-hide-ttc';
+
+function getHideTtcPref() {
+    try {
+        return localStorage.getItem(HIDE_TTC_KEY) === 'true';
+    } catch (e) {
+        return false;
+    }
+}
+
+function setHideTtcPref(val) {
+    try {
+        localStorage.setItem(HIDE_TTC_KEY, val);
+    } catch (e) { }
+}
+
 const ADULT_SKATE_KEY = 'howfar-adult-skate';
 
 function getAdultSkatePref() {
@@ -655,6 +732,17 @@ function initMenu() {
             renderResults(appResults, true);
         }
     }));
+
+    const ttcToggle = document.getElementById('hide-ttc-toggle');
+    if (ttcToggle) {
+        ttcToggle.checked = getHideTtcPref();
+        ttcToggle.addEventListener('change', () => {
+            setHideTtcPref(ttcToggle.checked);
+            if (appResults && Object.keys(appResults).length > 0) {
+                renderResults(appResults, true);
+            }
+        });
+    }
 
     const adultToggle = document.getElementById('adult-skate-toggle');
     adultToggle.checked = getAdultSkatePref();
@@ -856,7 +944,10 @@ function renderFacilityItem(config, results, isDone) {
 
 function renderResults(results, isDone = false) {
     const list = document.getElementById('facilities-list');
+    const hideTtc = getHideTtcPref();
+
     list.innerHTML = facilityGroups.map(group => {
+        if (group === 'ttc' && hideTtc) return '';
         const configs = facilitiesConfigs.filter(c => c.group === group);
         const items = configs.map(config => renderFacilityItem(config, results, isDone));
         return `<div class="facility-group glass-card">${items.join('<div class="group-divider"></div>')}</div>`;

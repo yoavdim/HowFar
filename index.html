@@ -99,7 +99,7 @@
                     <div class="app-brand">
                         <i class="fa-solid fa-location-arrow"></i> HowFar
                     </div>
-                    <span class="weather-loc-text">Downtown Toronto</span>
+                    <span class="weather-loc-text" id="weather-loc-text">Locating...</span>
                     <p id="weather-desc" class="weather-desc">Loading weather...</p>
                 </div>
                 <div class="weather-temp">
@@ -125,6 +125,10 @@
             </div>
         </div>
         <div class="menu-section" style="padding-bottom: 1rem; margin-bottom: 0.75rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: #E5E7EB; cursor: pointer; margin-bottom: 0.5rem;">
+                <input type="checkbox" id="hide-ttc-toggle" style="accent-color: #38BDF8; width: 1.1rem; height: 1.1rem; cursor: pointer;">
+                Hide TTC transit
+            </label>
             <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: #E5E7EB; cursor: pointer;">
                 <input type="checkbox" id="adult-skate-toggle" style="accent-color: #38BDF8; width: 1.1rem; height: 1.1rem; cursor: pointer;">
                 Show 19+ drop-in skates

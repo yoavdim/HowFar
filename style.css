@@ -27,6 +27,12 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+@media (max-width: 600px) {
+    body {
+        background-image: none;
+    }
+}
+
 .app-container {
     max-width: 600px;
     margin: 0 auto;
