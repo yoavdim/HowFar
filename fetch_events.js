@@ -20,6 +20,244 @@ const FESTIVALS_ENABLED = false;
 
 const MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
 
+// --- Ticketmaster (concerts + sports schedules) ---------------------------
+// Only schedule/venue data is fetched here, once a day. Live ticket prices are
+// deliberately NOT stored: they go stale in minutes, so the client fetches them
+// per-view through the Cloudflare Worker in worker/.
+const TM_KEY = process.env.TICKETMASTER_API_KEY || null;
+const TM_ROOT = "https://app.ticketmaster.com/discovery/v2";
+
+// Music *segment* id. Deliberately not classificationName=Music: that matches
+// the name of any segment/genre/subgenre, and the Film segment contains a genre
+// also called "Music", which would drag film screenings into the concerts card.
+const MUSIC_SEGMENT_ID = "KZFzniwnSyZfZ7v7nJ";
+
+// Geohash of downtown Toronto (43.6532,-79.3832 to within ~56m) plus a radius,
+// used instead of dmaId=527. The DMA is wrong in both directions: it returned
+// events in Thunder Bay, Windsor and London, while *missing* 63 Toronto events
+// that this radius query finds (84 vs 147 in the same window). Filtering at the
+// source also means no post-hoc geographic filter is needed anywhere else.
+// 60km reaches the wider Golden Horseshoe: the GTA plus Hamilton (59km),
+// Oshawa and St Catharines. Drop to 40 to keep it to the GTA proper.
+const TORONTO_GEOPOINT = "dpz83df";
+const TORONTO_RADIUS_KM = "60";
+
+// Arena/stadium tier — these get priority in the concerts card. Ids are pinned
+// rather than resolved by keyword, because keyword lookup is ambiguous in three
+// different ways that no single matching rule handles:
+//   - Rogers Stadium has two legitimate ids (Toronto + a North York alias), so
+//     matching one would miss events filed under the other.
+//   - "Rogers Centre" also matches two "Parliament Foyer, Rogers Centre"
+//     venues in Ottawa.
+//   - Budweiser Stage matches nothing by name any more; it is now RBC
+//     Amphitheatre, and "Lake House at Budweiser Stage" is a separate venue.
+// Comments note approximate concert capacity, descending.
+const MAJOR_VENUE_IDS = {
+    "KovZ917ARzt":  "Rogers Stadium",      // ~50k
+    "Z7r9jZaAV6":   "Rogers Stadium",      // ~50k, alias listing
+    "KovZpa3Bbe":   "Rogers Centre",       // ~40-50k
+    "KovZpZAE77aA": "BMO Field",           // ~28k
+    "KovZpZAFFE1A": "Scotiabank Arena",    // ~19.8k
+    "KovZpZAEkkIA": "RBC Amphitheatre",    // ~16k, formerly Budweiser Stage
+    "KovZpZAJt7FA": "Coca-Cola Coliseum",  // ~8k
+};
+
+// Pinned for the same reason: keyword search also returns "Toronto Blue Jays
+// (SS)" (spring training), "Toronto Maple Leafs Alumni", fan fests and
+// "OLG Play Stage Presents ..." entries.
+const TEAMS = [
+    { key: "jays",    attractionId: "K8vZ91718W0", name: "Toronto Blue Jays" },
+    { key: "leafs",   attractionId: "K8vZ9171o80", name: "Toronto Maple Leafs" },
+    { key: "raptors", attractionId: "K8vZ9171KC0", name: "Toronto Raptors" },
+];
+
+// How far ahead to look. Combined with sort=date,asc&size=200 this is just a
+// safety bound — the soonest 200 events always cover "today" and "next up",
+// which is all the client ever displays, so no pagination is needed.
+const TM_WINDOW_DAYS = 14;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Public tier allows 5 requests/sec. The concerts and sports fetchers run
+// concurrently, so per-fetcher spacing isn't enough — they would collectively
+// burst past the limit and earn a 429. Every Ticketmaster call is therefore
+// serialized through this one chain, which guarantees the spacing globally no
+// matter how many callers there are.
+const TM_SPACING_MS = 250;
+let tmChain = Promise.resolve();
+
+function tmGate() {
+    const turn = tmChain.then(() => sleep(TM_SPACING_MS));
+    // Swallow errors so one failed call can't poison the queue for the rest.
+    tmChain = turn.catch(() => {});
+    return turn;
+}
+
+async function tmGet(path, params, { retryOn429 = true } = {}) {
+    await tmGate();
+
+    const qs = new URLSearchParams({ ...params, apikey: TM_KEY });
+    const res = await fetch(`${TM_ROOT}${path}?${qs}`, {
+        headers: { 'User-Agent': 'HowFar-DataFetcher/1.0 (GitHub Actions)' },
+        timeout: 20000,
+    });
+
+    if (res.status === 429 && retryOn429) {
+        console.warn(`  rate limited on ${path}, backing off 2s`);
+        await sleep(2000);
+        return tmGet(path, params, { retryOn429: false });
+    }
+    if (!res.ok) {
+        throw new Error(`Ticketmaster ${path} returned ${res.status}`);
+    }
+    return res.json();
+}
+
+function tmWindow() {
+    const fmt = (d) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+    const now = new Date();
+    // End of the final day, not the same clock time N days out: an evening show
+    // on the last day would otherwise fall just outside the window and vanish.
+    const end = new Date(now.getTime() + TM_WINDOW_DAYS * 86400000);
+    end.setUTCHours(23, 59, 59, 0);
+    return { startDateTime: fmt(now), endDateTime: fmt(end) };
+}
+
+// Flattens a Discovery API event into just what the cards need.
+function mapEvent(ev, extra = {}) {
+    const venue = ev._embedded?.venues?.[0];
+    const lat = parseFloat(venue?.location?.latitude);
+    const lon = parseFloat(venue?.location?.longitude);
+    if (!isFinite(lat) || !isFinite(lon)) return null;
+
+    const start = ev.dates?.start || {};
+    // dateTime is absolute UTC and is absent when the time is TBA.
+    const startUtc = start.dateTime || null;
+    const timeTBA = Boolean(start.timeTBA || start.noSpecificTime || !startUtc);
+    if (!start.localDate) return null;
+
+    return {
+        id: ev.id,
+        name: ev.name,
+        venueName: venue?.name || "Venue TBA",
+        lat, lon,
+        localDate: start.localDate,
+        startUtc,
+        timeTBA,
+        url: ev.url || null,
+        ...extra,
+    };
+}
+
+function dedupeById(events) {
+    const seen = new Map();
+    for (const e of events) if (e && !seen.has(e.id)) seen.set(e.id, e);
+    return [...seen.values()];
+}
+
+async function fetchConcerts() {
+    if (!TM_KEY) {
+        console.log("Concerts skipped: TICKETMASTER_API_KEY not set.");
+        return null;
+    }
+
+    try {
+        const window = tmWindow();
+        const base = {
+            ...window,
+            segmentId: MUSIC_SEGMENT_ID,
+            sort: "date,asc",
+            size: "200",
+        };
+
+        const collected = [];
+
+        // Tier A: query each arena directly. Done separately rather than
+        // filtering the city-wide result so a busy week of small-venue shows
+        // can never push an arena date off the single page we fetch.
+        for (const [venueId, venueLabel] of Object.entries(MAJOR_VENUE_IDS)) {
+            const body = await tmGet("/events.json", { ...base, venueId });
+            const events = body?._embedded?.events ?? [];
+            console.log(`  ${venueLabel} (${venueId}): ${events.length} events`);
+            for (const ev of events) {
+                const mapped = mapEvent(ev, { isMajorVenue: true });
+                if (mapped) collected.push(mapped);
+            }
+        }
+
+        // Tier B: everything else within range of the city.
+        const cityBody = await tmGet("/events.json", {
+            ...base,
+            geoPoint: TORONTO_GEOPOINT,
+            radius: TORONTO_RADIUS_KM,
+            unit: "km",
+        });
+        const cityEvents = cityBody?._embedded?.events ?? [];
+        console.log(`  Toronto-wide: ${cityEvents.length} events`);
+        // Tagged by venue id, not name: venues get renamed (Budweiser Stage is
+        // "RBC Amphitheatre" as of 2026) and a name comparison would silently
+        // stop recognising them as major.
+        const majorIds = new Set(Object.keys(MAJOR_VENUE_IDS));
+        for (const ev of cityEvents) {
+            const mapped = mapEvent(ev, {
+                isMajorVenue: majorIds.has(ev._embedded?.venues?.[0]?.id),
+            });
+            if (mapped) collected.push(mapped);
+        }
+
+        const concerts = dedupeById(collected).sort((a, b) =>
+            (a.startUtc || a.localDate).localeCompare(b.startUtc || b.localDate));
+
+        console.log(`Concerts: ${concerts.length} unique events`);
+        return concerts;
+    } catch (e) {
+        console.warn("Concerts fetch failed:", e.message);
+        return null;
+    }
+}
+
+async function fetchSports() {
+    if (!TM_KEY) {
+        console.log("Sports skipped: TICKETMASTER_API_KEY not set.");
+        return null;
+    }
+
+    try {
+        const window = tmWindow();
+        const collected = [];
+
+        for (const team of TEAMS) {
+            // The radius pins this to Toronto-area fixtures, i.e. home games.
+            // Without a location constraint the API returns away games too and
+            // the card would point at an arena in another country.
+            const body = await tmGet("/events.json", {
+                ...window,
+                attractionId: team.attractionId,
+                geoPoint: TORONTO_GEOPOINT,
+                radius: TORONTO_RADIUS_KM,
+                unit: "km",
+                sort: "date,asc",
+                size: "200",
+            });
+            const events = body?._embedded?.events ?? [];
+            console.log(`  ${team.name}: ${events.length} home events`);
+            for (const ev of events) {
+                const mapped = mapEvent(ev, { team: team.key });
+                if (mapped) collected.push(mapped);
+            }
+        }
+
+        const sports = dedupeById(collected).sort((a, b) =>
+            (a.startUtc || a.localDate).localeCompare(b.startUtc || b.localDate));
+
+        console.log(`Sports: ${sports.length} unique home games`);
+        return sports;
+    } catch (e) {
+        console.warn("Sports fetch failed:", e.message);
+        return null;
+    }
+}
+
 async function fetchNpsEvents() {
     const events = [];
 
@@ -335,10 +573,12 @@ async function main() {
 
     const previous = readPrevious();
 
-    const [npsData, ckanFestivals, skatingData] = await Promise.all([
+    const [npsData, ckanFestivals, skatingData, concertsData, sportsData] = await Promise.all([
         fetchNpsEvents(),
         fetchCkanFestivals(),
-        fetchSkating()
+        fetchSkating(),
+        fetchConcerts(),
+        fetchSports()
     ]);
 
     const now = new Date().toISOString();
@@ -346,6 +586,8 @@ async function main() {
     const nps = pick('npSquare', 'NP Square events', npsData, previous, now, degraded);
     const fest = pick('festivals', 'Festivals', ckanFestivals, previous, now, degraded, { disabled: !FESTIVALS_ENABLED });
     const skate = pick('skating', 'Drop-in skating', skatingData, previous, now, degraded);
+    const concerts = pick('concerts', 'Concerts', concertsData, previous, now, degraded, { disabled: !TM_KEY });
+    const sports = pick('sports', 'Sports', sportsData, previous, now, degraded, { disabled: !TM_KEY });
 
     const output = {
         lastUpdated: now,
@@ -354,15 +596,20 @@ async function main() {
         sources: {
             npSquare: nps.meta,
             festivals: fest.meta,
-            skating: skate.meta
+            skating: skate.meta,
+            concerts: concerts.meta,
+            sports: sports.meta
         },
         npSquare: nps.value,
         festivals: fest.value,
-        skating: skate.value
+        skating: skate.value,
+        concerts: concerts.value,
+        sports: sports.value
     };
 
     fs.writeFileSync(OUT_FILE, JSON.stringify(output, null, 0));
-    console.log(`Wrote ${OUT_FILE} (NPS: ${nps.value.length}, festivals: ${fest.value.length}, skating: ${skate.value.length})`);
+    console.log(`Wrote ${OUT_FILE} (NPS: ${nps.value.length}, festivals: ${fest.value.length}, ` +
+        `skating: ${skate.value.length}, concerts: ${concerts.value.length}, sports: ${sports.value.length})`);
 
     if (degraded.length > 0) {
         console.log(`::warning title=Degraded event data::${degraded.length} source(s) failed: ${degraded.join(', ')}`);
@@ -384,10 +631,15 @@ main().catch(e => {
     const empty = { fetched: null, stale: true };
     fs.writeFileSync(OUT_FILE, JSON.stringify({
         lastUpdated: new Date().toISOString(),
-        sources: { npSquare: empty, festivals: empty, skating: empty },
+        sources: {
+            npSquare: empty, festivals: empty, skating: empty,
+            concerts: empty, sports: empty
+        },
         npSquare: [],
         festivals: [],
-        skating: []
+        skating: [],
+        concerts: [],
+        sports: []
     }, null, 0));
     process.exit(0); // don't block the deploy — fallback data is still useful
 });

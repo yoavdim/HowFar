@@ -472,6 +472,17 @@ body {
     font-size: 1.05rem;
     font-weight: 600;
     margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    overflow: visible; /* so the "+" toggle is never clipped */
+}
+
+/* Truncation moves to the text itself now that the row is a flex container */
+.facility-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .facility-meta {
@@ -627,4 +638,104 @@ body {
     .menu-dropdown {
         right: calc(50% - 300px + 2rem);
     }
+}
+
+/* "+" toggle beside a card title, revealing the rest of today's options */
+.expand-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: var(--text-secondary);
+    width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 50%;
+    margin-left: 0.5rem;
+    padding: 0;
+    cursor: pointer;
+    font-size: 0.65rem;
+    line-height: 1;
+    vertical-align: middle;
+    flex-shrink: 0;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.expand-btn:hover, .expand-btn:focus-visible {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+
+/* Expanded list of the remaining options for today */
+.facility-alts {
+    background: rgba(0, 0, 0, 0.18);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.facility-alt-row {
+    display: flex;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.facility-alt-row:first-child {
+    border-top: none;
+}
+
+.facility-alt-link {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 0.7rem 1.25rem 0.7rem 4.75rem;
+    color: inherit;
+    text-decoration: none;
+}
+
+.facility-alt-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.facility-alt-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.facility-alt-name,
+.facility-alt-meta {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.facility-alt-name {
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.facility-alt-meta {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.facility-alt-dist {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.alt-ticket {
+    padding: 0.7rem 1.25rem 0.7rem 0.5rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.alt-ticket:hover {
+    color: #fff;
+}
+
+@media (max-width: 600px) {
+    .facility-alt-link { padding-left: 4rem; }
+    .facility-alt-name { font-size: 0.8rem; }
+    .facility-alt-meta, .facility-alt-dist { font-size: 0.7rem; }
 }

@@ -43,6 +43,10 @@ jobs:
           restore-keys: toronto-events-
 
       - name: Fetch Toronto events
+        env:
+          # Concerts + sports schedules. If unset, those two sources skip
+          # cleanly and the rest of the run is unaffected.
+          TICKETMASTER_API_KEY: ${{ secrets.TICKETMASTER_API_KEY }}
         run: |
           npm install
           node fetch_events.js

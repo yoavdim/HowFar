@@ -43,10 +43,37 @@ const facilitiesConfigs = [
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'facilities' },
     { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'facilities' },
     { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'other' },
+    { id: 'concert', name: 'Concerts', icon: 'fa-music', color: '#8B5CF6', group: 'other' },
+    { id: 'sports', name: 'Sports', icon: 'fa-basketball', color: '#8B5CF6', group: 'other' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
 ];
 
+// Per-team icon for the sports card, since one card covers three sports.
+const TEAM_ICONS = { jays: 'fa-baseball', leafs: 'fa-hockey-puck', raptors: 'fa-basketball' };
+
+// Cards where "happening now/today" is conveyed by the timing on row 3 rather
+// than by the name on row 2, so the green highlight belongs on the subtitle.
+const HIGHLIGHTS_SUBTITLE = new Set(['skating', 'concert', 'sports']);
+
+// No ticket prices: Discovery API returns no priceRanges for Toronto events
+// (verified 0/100 across all segments), and the Inventory Status API that does
+// carry Canadian pricing needs authorized access. Cards link out to
+// Ticketmaster, where the real price lives.
+
 const facilityGroups = ['bikes', 'ttc', 'facilities', 'other'];
+
+// Nathan Phillips Square is a single fixed venue, so its coordinates are known
+// rather than fetched.
+const NP_SQUARE = { lat: 43.6534, lon: -79.3841 };
+
+// Which cards the user has expanded via the "+" button.
+const expandedCards = new Set();
+
+function toggleCardExpand(id) {
+    if (expandedCards.has(id)) expandedCards.delete(id);
+    else expandedCards.add(id);
+    renderResults(appResults, appDone);
+}
 
 let userLat = null;
 let userLon = null;
@@ -239,9 +266,128 @@ function skeletonItem(config) {
 function renderSkeletonCards() {
     const list = document.getElementById('facilities-list');
     list.innerHTML = facilityGroups.map(group => {
-        const configs = facilitiesConfigs.filter(c => c.group === group);
+        const configs = visibleConfigs(group);
+        if (!configs.length) return '';
         return `<div class="facility-group glass-card">${configs.map(skeletonItem).join('<div class="group-divider"></div>')}</div>`;
     }).join('');
+}
+
+// --- Ticketmaster event selection (concerts + sports) ---------------------
+
+// A TBA start time is fine for a future date, but meaningless for today — we
+// can't tell if it has already begun, so today's TBA events are dropped.
+function isEventStillUpcoming(ev, todayStr) {
+    if (ev.timeTBA || !ev.startUtc) return ev.localDate > todayStr;
+    return new Date(ev.startUtc).getTime() > Date.now();
+}
+
+function withDistance(items) {
+    return items.map(ev => ({ ...ev, distance: getDistance(userLat, userLon, ev.lat, ev.lon) }));
+}
+
+// THE ordering rule. Every card's chosen item and its "+" list come from this
+// one function — selection is element [0], the expand list is the rest — so the
+// two can never disagree.
+//
+// tiered=true is the concerts rule: arenas/stadiums rank ahead of everything
+// else, each group internally by distance. Taking [0] of that reproduces
+// "nearest arena today, else nearest anywhere today" exactly.
+//
+// Callers filter to "available today" themselves, because the predicate
+// genuinely differs by type: a concert is out once it has started, a drop-in
+// skate only once it has ended, and an NP Square event spans whole days.
+function rankOptions(items, { tiered = false } = {}) {
+    if (!items?.length || userLat == null || userLon == null) return [];
+    const ranked = withDistance(items);
+    const byDistance = (a, b) => a.distance - b.distance;
+    if (!tiered) return ranked.sort(byDistance);
+    return [
+        ...ranked.filter(e => e.isMajorVenue).sort(byDistance),
+        ...ranked.filter(e => !e.isMajorVenue).sort(byDistance),
+    ];
+}
+
+// Ticketmaster events happening today that have not started yet.
+function ticketmasterToday(events, todayStr) {
+    return (events || []).filter(
+        ev => ev.localDate === todayStr && isEventStillUpcoming(ev, todayStr));
+}
+
+// Soonest first, distance only as a tiebreak within the same day. Used only for
+// the "nothing on today" fallback.
+function soonestThenNearest(events) {
+    const sorted = withDistance(events).sort((a, b) => {
+        const ad = a.startUtc || a.localDate;
+        const bd = b.startUtc || b.localDate;
+        if (ad !== bd) return ad < bd ? -1 : 1;
+        return a.distance - b.distance;
+    });
+    return sorted[0] || null;
+}
+
+// Returns { selected, alternatives }. `alternatives` is only ever populated
+// from today's list, so a card showing a future event never offers a "+".
+function pickEvent(events, todayStr, { tiered = false } = {}) {
+    const todays = rankOptions(ticketmasterToday(events, todayStr), { tiered });
+    if (todays.length) {
+        return { selected: todays[0], alternatives: todays.slice(1) };
+    }
+    if (!events?.length || userLat == null || userLon == null) {
+        return { selected: null, alternatives: [] };
+    }
+    const upcoming = events.filter(ev => isEventStillUpcoming(ev, todayStr));
+    return { selected: soonestThenNearest(upcoming), alternatives: [] };
+}
+
+// Skating sessions carry local "H:MM" start/end times rather than a UTC
+// instant, so "available" here means the session has not finished yet — a
+// drop-in you can still join partway through, unlike a concert that has already
+// begun. Normalised to localDate so it can share the ranking above.
+function skatingToday(skating, todayStr) {
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const toMins = (hhmm) => {
+        const [h, m] = String(hhmm).split(':').map(Number);
+        return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+    };
+    return (skating || [])
+        .filter(sk => sk.date === todayStr
+                   && (!sk.isAdult || getAdultSkatePref())
+                   && toMins(sk.end) > nowMins)
+        .map(sk => ({ ...sk, localDate: sk.date }));
+}
+
+// NP Square events span whole days and have no times, so "today" is simply the
+// date falling inside the range. They all share one location, so distance
+// ranking is a no-op that preserves source order.
+function npSquareToday(events, todayStr) {
+    return (events || [])
+        .filter(ev => ev.start <= todayStr && todayStr <= ev.end)
+        .map(ev => ({ ...ev, localDate: todayStr, lat: NP_SQUARE.lat, lon: NP_SQUARE.lon }));
+}
+
+function formatEventCard(ev, todayStr, iconOverride) {
+    const isToday = ev.localDate === todayStr;
+    const time = (!ev.timeTBA && ev.startUtc)
+        ? new Date(ev.startUtc).toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' })
+        : null;
+    const when = isToday
+        ? (time ? `Today ${time}` : 'Today')
+        : new Date(ev.localDate + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })
+          + (time ? ` ${time}` : '');
+
+    // Same row layout as every other card: generic name on row 1 (from
+    // facilitiesConfigs), the specific thing on row 2, timing on row 3.
+    return {
+        distance: ev.distance,
+        origLat: ev.lat,
+        origLon: ev.lon,
+        overrideIcon: iconOverride || null,
+        title: ev.name,
+        subtitle: `${ev.venueName} · ${when}`,
+        isActive: isToday,
+        ticketUrl: ev.url || null
+    };
 }
 
 // Pre-generated events data — produced daily by fetch_events.js via GitHub Actions.
@@ -249,6 +395,8 @@ function renderSkeletonCards() {
 async function fetchLiveEvents() {
     let npEvent = null;
     let nearestSkating = null;
+    let nearestConcert = null;
+    let nearestSport = null;
 
     // Step 1: Try the pre-generated JSON (fast, same-origin, no CORS).
     try {
@@ -256,34 +404,42 @@ async function fetchLiveEvents() {
         if (res.ok) {
             const data = await res.json();
 
-            // NPS events — filter on-device so "today" is always current
-            const events = data.npSquare || [];
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const todayNames = [];
-            let nextTitle = null;
-            let nextSubtitle = null;
-            let nextWeight = Infinity;
+            // Everything below is filtered on-device so "today" always
+            // reflects the user's clock, not when the Action last ran.
+            const todayStr = new Date().toLocaleDateString('en-CA');
 
-            for (const ev of events) {
-                const s = new Date(ev.start + 'T12:00'); s.setHours(0, 0, 0, 0);
-                const e = new Date(ev.end + 'T12:00'); e.setHours(0, 0, 0, 0);
-                if (today >= s && today <= e) {
-                    if (!todayNames.includes(ev.name)) todayNames.push(ev.name);
-                } else if (s > today) {
-                    const w = (s.getMonth() + 1) * 100 + s.getDate();
-                    if (w < nextWeight) {
-                        nextWeight = w;
-                        nextSubtitle = s.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                        nextTitle = ev.name;
-                    }
-                }
+            // NP Square: dedupe by name, then rank. All events share one
+            // location so the ranking preserves source order.
+            const npsSeen = new Set();
+            const npsTodayList = npSquareToday(data.npSquare, todayStr)
+                .filter(ev => !npsSeen.has(ev.name) && npsSeen.add(ev.name));
+            const npsRanked = rankOptions(npsTodayList);
+
+            if (npsRanked.length) {
+                npEvent = {
+                    title: npsRanked[0].name,
+                    subtitle: "Today",
+                    isActive: true,
+                    alternatives: npsRanked.slice(1).map(ev => ({
+                        name: ev.name, meta: "Today",
+                        distance: ev.distance, origLat: ev.lat, origLon: ev.lon
+                    }))
+                };
+            } else {
+                // Nothing on today — show the next one up, with no "+".
+                const future = (data.npSquare || [])
+                    .filter(ev => ev.start > todayStr)
+                    .sort((a, b) => a.start.localeCompare(b.start));
+                const next = future[0];
+                npEvent = {
+                    title: next ? next.name : null,
+                    subtitle: next
+                        ? new Date(next.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })
+                        : null,
+                    isActive: false,
+                    alternatives: []
+                };
             }
-            npEvent = {
-                title: todayNames.length > 0 ? todayNames.join(', ') : (nextTitle || null),
-                subtitle: todayNames.length > 0 ? "Today" : (nextSubtitle || null),
-                isActive: todayNames.length > 0
-            };
 
             if (data.lastUpdated) {
                 const date = new Date(data.lastUpdated);
@@ -291,46 +447,72 @@ async function fetchLiveEvents() {
                 if (el) el.textContent = `Events updated: ${date.toLocaleString()}`;
             }
 
-            // Find nearest active skating
-            if (data.skating?.length && userLat && userLon) {
-                const todayStr = today.toISOString().split('T')[0];
-                const validSessions = data.skating.filter(sk => 
-                    sk.date >= todayStr && (!sk.isAdult || getAdultSkatePref())
-                );
-                
-                if (validSessions.length > 0) {
-                    // Sort by date ascending, then by distance
-                    validSessions.sort((a, b) => {
-                        if (a.date < b.date) return -1;
-                        if (a.date > b.date) return 1;
-                        const distA = getDistance(userLat, userLon, a.lat, a.lon);
-                        const distB = getDistance(userLat, userLon, b.lat, b.lon);
-                        return distA - distB;
-                    });
-                    
-                    const best = validSessions[0];
-                    const isToday = best.date === todayStr;
-                    const dateDisplay = isToday ? '' : `(${new Date(best.date + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}) `;
-
+            // Skating: today's still-running sessions, nearest first.
+            const skateRanked = rankOptions(skatingToday(data.skating, todayStr));
+            if (skateRanked.length) {
+                const best = skateRanked[0];
+                nearestSkating = {
+                    distance: best.distance,
+                    origLat: best.lat,
+                    origLon: best.lon,
+                    title: `${best.start} – ${best.end}`,
+                    overrideName: best.name,
+                    isActive: true,
+                    alternatives: skateRanked.slice(1).map(sk => ({
+                        name: sk.name, meta: `${sk.start} – ${sk.end}`,
+                        distance: sk.distance, origLat: sk.lat, origLon: sk.lon
+                    }))
+                };
+            } else {
+                // Nothing left today — fall back to the next upcoming session.
+                const future = (data.skating || [])
+                    .filter(sk => sk.date > todayStr && (!sk.isAdult || getAdultSkatePref()))
+                    .sort((a, b) => a.date.localeCompare(b.date)
+                        || getDistance(userLat, userLon, a.lat, a.lon) - getDistance(userLat, userLon, b.lat, b.lon));
+                const best = future[0];
+                if (best) {
+                    const day = new Date(best.date + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
                     nearestSkating = {
                         distance: getDistance(userLat, userLon, best.lat, best.lon),
                         origLat: best.lat,
                         origLon: best.lon,
-                        title: `${dateDisplay}${best.start} – ${best.end}`,
+                        title: `(${day}) ${best.start} – ${best.end}`,
                         overrideName: best.name,
-                        isActive: isToday
+                        isActive: false,
+                        alternatives: []
                     };
                 }
             }
 
+            // Concerts use the tiered rule; sports is a flat pool.
+            const concertPick = pickEvent(data.concerts, todayStr, { tiered: true });
+            if (concertPick.selected) {
+                nearestConcert = formatEventCard(concertPick.selected, todayStr);
+                nearestConcert.alternatives = concertPick.alternatives.map(ev => {
+                    const card = formatEventCard(ev, todayStr);
+                    return { name: card.title, meta: card.subtitle, distance: ev.distance,
+                             origLat: ev.lat, origLon: ev.lon, ticketUrl: card.ticketUrl };
+                });
+            }
+
+            const sportPick = pickEvent(data.sports, todayStr);
+            if (sportPick.selected) {
+                nearestSport = formatEventCard(sportPick.selected, todayStr, TEAM_ICONS[sportPick.selected.team]);
+                nearestSport.alternatives = sportPick.alternatives.map(ev => {
+                    const card = formatEventCard(ev, todayStr, TEAM_ICONS[ev.team]);
+                    return { name: card.title, meta: card.subtitle, distance: ev.distance,
+                             origLat: ev.lat, origLon: ev.lon, ticketUrl: card.ticketUrl };
+                });
+            }
+
             console.log("Loaded pre-generated toronto_events.json");
-            return { npEvent, nearestSkating };
+            return { npEvent, nearestSkating, nearestConcert, nearestSport };
         }
     } catch (e) {
         console.warn("toronto_events.json unavailable:", e.message);
     }
 
-    return { npEvent: null, nearestSkating: null };
+    return { npEvent: null, nearestSkating: null, nearestConcert: null, nearestSport: null };
 }
 
 async function resolveLocationName(lat, lon) {
@@ -436,23 +618,38 @@ async function fetchAllData() {
         // Hardcoded municipal item — np-square is always available
         if (liveNpEvent !== undefined) {
             results['np-square'] = {
-                origLat: 43.6534,
-                origLon: -79.3841,
-                distance: getDistance(userLat, userLon, 43.6534, -79.3841),
+                origLat: NP_SQUARE.lat,
+                origLon: NP_SQUARE.lon,
+                distance: getDistance(userLat, userLon, NP_SQUARE.lat, NP_SQUARE.lon),
                 title: liveNpEvent?.title || "Nothing today",
                 subtitle: liveNpEvent?.subtitle || null,
-                isActive: liveNpEvent?.isActive || false
+                isActive: liveNpEvent?.isActive || false,
+                alternatives: liveNpEvent?.alternatives || []
             };
         }
         
+        // Concert + sports cards: like skating, only set once the events fetch
+        // has resolved, so they render as skeletons rather than "None found".
+        if (liveConcert !== undefined) {
+            results['concert'] = liveConcert || null;
+        }
+        if (liveSport !== undefined) {
+            results['sports'] = liveSport || null;
+        }
+
         // Skating card: waits for the events fetch, same as np-square above.
         if (liveSkating !== undefined) {
             if (liveSkating) {
                 results['skating'] = {
                     distance: liveSkating.distance,
+                    // origLat/origLon were previously omitted here, which left
+                    // the card's navigation link pointing at "undefined".
+                    origLat: liveSkating.origLat,
+                    origLon: liveSkating.origLon,
                     title: liveSkating.overrideName,
                     subtitle: liveSkating.title,
-                    isActive: liveSkating.isActive
+                    isActive: liveSkating.isActive,
+                    alternatives: liveSkating.alternatives || []
                 };
             } else {
                 results['skating'] = {
@@ -505,11 +702,15 @@ async function fetchAllData() {
 
     let liveNpEvent = null;
     let liveSkating = null;
+    let liveConcert = null;
+    let liveSport = null;
 
     const eventsPromise = (async () => {
-        const { npEvent, nearestSkating } = await fetchLiveEvents();
+        const { npEvent, nearestSkating, nearestConcert, nearestSport } = await fetchLiveEvents();
         liveNpEvent = npEvent;
         liveSkating = nearestSkating;
+        liveConcert = nearestConcert;
+        liveSport = nearestSport;
         
         if (appDone) {
             computeCards();
@@ -570,6 +771,22 @@ function getHideTtcPref() {
 function setHideTtcPref(val) {
     try {
         localStorage.setItem(HIDE_TTC_KEY, val);
+    } catch (e) { }
+}
+
+const HIDE_SPORTS_KEY = 'howfar-hide-sports';
+
+function getHideSportsPref() {
+    try {
+        return localStorage.getItem(HIDE_SPORTS_KEY) === 'true';
+    } catch (e) {
+        return false;
+    }
+}
+
+function setHideSportsPref(val) {
+    try {
+        localStorage.setItem(HIDE_SPORTS_KEY, val);
     } catch (e) { }
 }
 
@@ -696,6 +913,17 @@ function initMenu() {
         });
     }
 
+    const sportsToggle = document.getElementById('hide-sports-toggle');
+    if (sportsToggle) {
+        sportsToggle.checked = getHideSportsPref();
+        sportsToggle.addEventListener('change', () => {
+            setHideSportsPref(sportsToggle.checked);
+            if (appResults && Object.keys(appResults).length > 0) {
+                renderResults(appResults, appDone);
+            }
+        });
+    }
+
     const adultToggle = document.getElementById('adult-skate-toggle');
     adultToggle.checked = getAdultSkatePref();
     adultToggle.addEventListener('change', async () => {
@@ -807,6 +1035,50 @@ function bikeStatusText(item, cardId) {
     return '';
 }
 
+// "+" appears only when there are 2+ options happening today, i.e. when the
+// card actually has something else to reveal. Future-only cards get nothing.
+function expandToggleHtml(config, item) {
+    if (!item?.alternatives?.length) return '';
+    const open = expandedCards.has(config.id);
+    return `<button type="button" class="expand-btn" aria-expanded="${open}"`
+        + ` aria-label="${open ? 'Hide' : 'Show'} ${item.alternatives.length} more today"`
+        + ` onclick="event.preventDefault(); event.stopPropagation(); toggleCardExpand('${config.id}')">`
+        + `<i class="fa-solid ${open ? 'fa-minus' : 'fa-plus'}"></i></button>`;
+}
+
+// The remaining options for today, in the same order the selection used.
+function alternativesHtml(config, item) {
+    if (!item?.alternatives?.length || !expandedCards.has(config.id)) return '';
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const targetAttr = (!isAndroid && !isIOS) ? 'target="_blank"' : '';
+
+    const rows = item.alternatives.map(alt => {
+        const mapUrl = isAndroid
+            ? `google.navigation:q=${alt.origLat},${alt.origLon}&mode=w`
+            : isIOS
+                ? `comgooglemaps://?daddr=${alt.origLat},${alt.origLon}&directionsmode=walking`
+                : `https://www.google.com/maps/dir/?api=1&destination=${alt.origLat},${alt.origLon}&travelmode=walking`;
+        const ticket = alt.ticketUrl
+            ? `<a href="${alt.ticketUrl}" ${targetAttr} class="alt-ticket" aria-label="Tickets"
+                  onclick="event.stopPropagation();"><i class="fa-solid fa-ticket"></i></a>`
+            : '';
+        return `
+            <div class="facility-alt-row">
+                <a href="${mapUrl}" ${targetAttr} data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" class="facility-alt-link">
+                    <div class="facility-alt-details">
+                        <div class="facility-alt-name">${alt.name}</div>
+                        <div class="facility-alt-meta">${alt.meta}</div>
+                    </div>
+                    <div class="facility-alt-dist">${formatDistance(alt.distance)}</div>
+                </a>
+                ${ticket}
+            </div>`;
+    }).join('');
+
+    return `<div class="facility-alts">${rows}</div>`;
+}
+
 function renderFacilityItem(config, results, isDone) {
     const item = results[config.id];
     const isAndroid = /Android/i.test(navigator.userAgent);
@@ -859,13 +1131,17 @@ function renderFacilityItem(config, results, isDone) {
         iconHref = "https://www.toronto.ca/services-payments/venues-facilities-bookings/booking-city-facilities/city-squares/nathan-phillips-square/events-happening-on-nathan-phillips-square/";
     } else if (config.id === 'skating') {
         iconHref = "https://www.toronto.ca/explore-enjoy/parks-recreation/program-activities/ice-snow-activities/public-leisure-skating/";
+    } else if (item.ticketUrl) {
+        iconHref = item.ticketUrl;
     } else if (isAndroid || isIOS) {
         if (isBike) iconHref = bikeAppUrl;
         else if (isTransit) iconHref = walletAppUrl;
     }
 
     const iconStyles = `color: ${config.color}; padding: 1.1rem 1rem 1.1rem 1.25rem; margin-right: 1rem; text-decoration: none; display: flex; align-items: center; justify-content: center;`;
-    const iconHtml = `<i class="fa-solid ${config.icon}"></i>`;
+    // overrideIcon lets one card vary its icon per result (e.g. the sports card
+    // showing hockey/basketball/baseball depending on the team playing).
+    const iconHtml = `<i class="fa-solid ${item.overrideIcon || config.icon}"></i>`;
     const targetAttr = (!isAndroid && !isIOS) ? 'target="_blank"' : '';
 
     return `
@@ -877,9 +1153,9 @@ function renderFacilityItem(config, results, isDone) {
             
             <a href="${mapUrl}" ${targetAttr} data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" style="flex: 1; display: flex; align-items: center; padding: 1.1rem 1.25rem 1.1rem 0; color: inherit; text-decoration: none; min-width: 0;">
                 <div class="facility-details" style="flex: 1; min-width: 0;">
-                    <div class="facility-name">${item.overrideName || config.name}</div>
-                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${item.isActive && config.id !== 'skating' ? 'color: var(--success-color); font-weight: 500;' : ''}">${item.title}</div>
-                    ${item.subtitle ? `<div class="facility-status" style="${item.isActive && config.id === 'skating' ? 'color: var(--success-color); font-weight: 500;' : 'color: var(--text-secondary); font-weight: 400;'}">${item.subtitle}</div>` : ''}
+                    <div class="facility-name"><span class="facility-name-text">${item.overrideName || config.name}</span>${expandToggleHtml(config, item)}</div>
+                    <div class="facility-meta" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ${item.isActive && !HIGHLIGHTS_SUBTITLE.has(config.id) ? 'color: var(--success-color); font-weight: 500;' : ''}">${item.title}</div>
+                    ${item.subtitle ? `<div class="facility-status" style="${item.isActive && HIGHLIGHTS_SUBTITLE.has(config.id) ? 'color: var(--success-color); font-weight: 500;' : 'color: var(--text-secondary); font-weight: 400;'}">${item.subtitle}</div>` : ''}
                     ${item.fallback ? `<div class="facility-status">Nearest stop · direction unknown</div>` : ''}
                     ${item.status ? `<div class="facility-status">${bikeStatusText(item, config.id)}</div>` : ''}
                 </div>
@@ -891,7 +1167,12 @@ function renderFacilityItem(config, results, isDone) {
                     </div>
                 </div>
             </a>
-        </div>`;
+        </div>${alternativesHtml(config, item)}`;
+}
+
+function visibleConfigs(group) {
+    const hideSports = getHideSportsPref();
+    return facilitiesConfigs.filter(c => c.group === group && !(hideSports && c.id === 'sports'));
 }
 
 function renderResults(results, isDone = false) {
@@ -900,7 +1181,8 @@ function renderResults(results, isDone = false) {
 
     list.innerHTML = facilityGroups.map(group => {
         if (group === 'ttc' && hideTtc) return '';
-        const configs = facilitiesConfigs.filter(c => c.group === group);
+        const configs = visibleConfigs(group);
+        if (!configs.length) return '';
         const items = configs.map(config => renderFacilityItem(config, results, isDone));
         return `<div class="facility-group glass-card">${items.join('<div class="group-divider"></div>')}</div>`;
     }).join('');
