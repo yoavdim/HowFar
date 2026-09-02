@@ -1,4 +1,4 @@
-const CACHE_NAME = 'howfar-cache-v3';
+const CACHE_NAME = 'howfar-cache-v4';
 
 const CACHE_ASSETS = [
     './',

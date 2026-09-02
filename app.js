@@ -43,7 +43,6 @@ const facilitiesConfigs = [
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'facilities' },
     { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'facilities' },
     { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'other' },
-    { id: 'festival', name: 'Festival', icon: 'fa-masks-theater', color: '#8B5CF6', group: 'other' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
 ];
 
@@ -249,7 +248,6 @@ function renderSkeletonCards() {
 // Falls back to live CORS-proxied fetches if the file is unavailable (local dev).
 async function fetchLiveEvents() {
     let npEvent = null;
-    let nearestFestival = null;
     let nearestSkating = null;
 
     // Step 1: Try the pre-generated JSON (fast, same-origin, no CORS).
@@ -293,44 +291,6 @@ async function fetchLiveEvents() {
                 if (el) el.textContent = `Events updated: ${date.toLocaleString()}`;
             }
 
-            // Find nearest festival to user
-            if (data.festivals?.length && userLat && userLon) {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                let minDist = Infinity;
-                let bestActive = null;
-
-                for (const fb of data.festivals) {
-                    const start = new Date(fb.start + 'T12:00'); start.setHours(0, 0, 0, 0);
-                    const end = new Date(fb.end + 'T12:00'); end.setHours(0, 0, 0, 0);
-                    if (end < today) continue;
-                    const active = today >= start && today <= end;
-                    const dist = getDistance(userLat, userLon, fb.lat, fb.lon);
-                    if (active && dist < minDist) {
-                        minDist = dist;
-                        bestActive = fb;
-                    }
-                }
-
-                if (bestActive) {
-                    const d = getDistance(userLat, userLon, bestActive.lat, bestActive.lon);
-                    const dateStr = new Date(bestActive.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(bestActive.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                    nearestFestival = { distance: d, origLat: bestActive.lat, origLon: bestActive.lon, title: bestActive.name, subtitle: dateStr, isActive: true };
-                } else {
-                    minDist = Infinity;
-                    for (const fb of data.festivals) {
-                        const start = new Date(fb.start + 'T12:00'); start.setHours(0, 0, 0, 0);
-                        if (start < today) continue;
-                        const dist = getDistance(userLat, userLon, fb.lat, fb.lon);
-                        if (dist < minDist) {
-                            minDist = dist;
-                            const dateStr = new Date(fb.start + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + '–' + new Date(fb.end + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
-                            nearestFestival = { distance: dist, origLat: fb.lat, origLon: fb.lon, title: fb.name, subtitle: dateStr };
-                        }
-                    }
-                }
-            }
-
             // Find nearest active skating
             if (data.skating?.length && userLat && userLon) {
                 const todayStr = today.toISOString().split('T')[0];
@@ -364,13 +324,13 @@ async function fetchLiveEvents() {
             }
 
             console.log("Loaded pre-generated toronto_events.json");
-            return { npEvent, nearestFestival, nearestSkating };
+            return { npEvent, nearestSkating };
         }
     } catch (e) {
         console.warn("toronto_events.json unavailable:", e.message);
     }
 
-    return { npEvent: null, nearestFestival: null, nearestSkating: null };
+    return { npEvent: null, nearestSkating: null };
 }
 
 async function resolveLocationName(lat, lon) {
@@ -485,13 +445,7 @@ async function fetchAllData() {
             };
         }
         
-        // Festival card: only set once events have been fetched, otherwise leave
-        // undefined so it renders as a skeleton (not "None found nearby").
-        if (liveFestival !== undefined) {
-            results['festival'] = liveFestival || null;
-        }
-
-        // Skating card: like festival, wait for fetch.
+        // Skating card: waits for the events fetch, same as np-square above.
         if (liveSkating !== undefined) {
             if (liveSkating) {
                 results['skating'] = {
@@ -550,13 +504,11 @@ async function fetchAllData() {
     const bikePromise = fetchBikeShareData(setBikeResults);
 
     let liveNpEvent = null;
-    let liveFestival = null;
     let liveSkating = null;
 
     const eventsPromise = (async () => {
-        const { npEvent, nearestFestival, nearestSkating } = await fetchLiveEvents();
+        const { npEvent, nearestSkating } = await fetchLiveEvents();
         liveNpEvent = npEvent;
-        liveFestival = nearestFestival;
         liveSkating = nearestSkating;
         
         if (appDone) {

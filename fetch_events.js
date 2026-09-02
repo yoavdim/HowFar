@@ -5,19 +5,18 @@
 const fs = require('fs');
 const fetch = require('node-fetch');
 
+const OUT_FILE = 'toronto_events.json';
+
 const NPS_URL = "https://www.toronto.ca/services-payments/venues-facilities-bookings/booking-city-facilities/city-squares/nathan-phillips-square/events-happening-on-nathan-phillips-square/";
 const CKAN_URL = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=festivals-events";
 
-// Hardcoded festival list — developer updates this occasionally.
-// The GitHub Action runs daily and writes these into toronto_events.json.
-const HARDCODED_FESTIVALS = [
-    { name: "CNE (The Ex)", lat: 43.6306, lon: -79.4184, start: "2026-08-21", end: "2026-09-07" },
-    { name: "Toronto TAIWANfest", lat: 43.6396, lon: -79.3821, start: "2026-08-28", end: "2026-08-30" },
-    { name: "Thai Fest Toronto", lat: 43.6563, lon: -79.3805, start: "2026-08-29", end: "2026-08-30" },
-    { name: "FAN EXPO Canada", lat: 43.6426, lon: -79.3871, start: "2026-08-27", end: "2026-08-30" },
-    { name: "PHANTOMFEST", lat: 43.6407, lon: -79.3314, start: "2026-08-29", end: "2026-08-30" },
-    { name: "Pedestrian Sunday Kensington", lat: 43.6545, lon: -79.4002, start: "2026-08-30", end: "2026-08-30" }
-];
+// The festivals-events dataset's underlying feed (secure.toronto.ca) has been
+// Akamai-blocked (403) since ~2026-06-14, and the CKAN-hosted "backup" resource
+// just serves a stale cached copy of that same error page. Every URL the
+// dataset publishes leads to the same dead host — confirmed 2026-09-01.
+// Disabled here rather than removed so it's a one-line flip if Toronto ever
+// fixes it; no need to re-derive any of the parsing logic below.
+const FESTIVALS_ENABLED = false;
 
 const MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
 
@@ -33,38 +32,74 @@ async function fetchNpsEvents() {
         });
         if (!res.ok) {
             console.warn(`NPS page returned ${res.status}`);
-            return events;
+            return null;
         }
         const html = await res.text();
 
         const thisYear = new Date().getFullYear();
 
-        // Match "Month Day to Day: <a>name</a>" or "Month Day: <a>name</a>"
-        const pattern = /([A-Z][a-z]+)\s+(\d+)(?:\s+to\s+(\d+))?\s*:\s*<a[^>]*>([^<]+)<\/a>/gi;
+        // Matches every date-prefix format actually seen on the page:
+        //   "Month Day: "                       -> Jan 4: New Year's Skate Party
+        //   "Month Day to Day: "                 -> Jan 1 to 7: Cavalcade of Lights
+        //   "Month Day-Day: "                    -> November 6-7: All Charity Fest
+        //   "Month Day to Month Day: "           -> Sept 26 to October 1: Indigenous Legacy Gathering
+        //   "Month Day (Note): "                 -> Sept 7 (Labour Day): Labour Day Event
+        // Groups: 1=month, 2=day, 3=hyphen end day (same month),
+        //         4=second month (cross-month "to"), 5=end day (either "to" form)
+        const pattern = /([A-Z][a-z]+)\s+(\d+)(?:\s*[-\u2013]\s*(\d+)|\s+to\s+(?:([A-Z][a-z]+)\s+)?(\d+))?\s*(?:\([^)]*\))?\s*:\s*<a[^>]*>([^<]+)<\/a>/gi;
         let match;
         while ((match = pattern.exec(html)) !== null) {
-            const monthNum = MONTHS[match[1].toLowerCase()];
-            if (!monthNum) continue;
+            const startMonthNum = MONTHS[match[1].toLowerCase()];
+            if (!startMonthNum) continue;
             const startDay = parseInt(match[2]);
-            const endDay = match[3] ? parseInt(match[3]) : startDay;
-            const name = match[4].trim();
-            const mm = String(monthNum).padStart(2, '0');
+
+            let endMonthNum = startMonthNum;
+            let endDay = startDay;
+            if (match[3]) {
+                endDay = parseInt(match[3]); // "Day-Day", same month
+            } else if (match[5]) {
+                endDay = parseInt(match[5]); // "to Day" or "to Month Day"
+                if (match[4]) {
+                    const m = MONTHS[match[4].toLowerCase()];
+                    if (m) endMonthNum = m;
+                }
+            }
+
+            const name = match[6].trim();
+            // Handle a range spanning a year boundary (e.g. Dec -> Jan).
+            const endYear = endMonthNum < startMonthNum ? thisYear + 1 : thisYear;
+            const mmStart = String(startMonthNum).padStart(2, '0');
+            const mmEnd = String(endMonthNum).padStart(2, '0');
             events.push({
                 name,
-                start: `${thisYear}-${mm}-${String(startDay).padStart(2, '0')}`,
-                end: `${thisYear}-${mm}-${String(endDay).padStart(2, '0')}`
+                start: `${thisYear}-${mmStart}-${String(startDay).padStart(2, '0')}`,
+                end: `${endYear}-${mmEnd}-${String(endDay).padStart(2, '0')}`
             });
+        }
+
+        // Zero matches off a 200 response almost always means the page markup
+        // changed, not that the square is empty. Treat it as a failure so the
+        // previous run's data is carried forward instead of being wiped.
+        if (events.length === 0) {
+            console.warn("NPS page fetched but no events matched — markup may have changed");
+            return null;
         }
 
         console.log(`NPS: found ${events.length} events`);
     } catch (e) {
         console.warn("NPS fetch failed:", e.message);
+        return null;
     }
 
     return events;
 }
 
 async function fetchCkanFestivals() {
+    if (!FESTIVALS_ENABLED) {
+        console.log("Festivals source disabled (see FESTIVALS_ENABLED) — skipping fetch.");
+        return null;
+    }
+
     try {
         console.log("Fetching CKAN festivals-events metadata...");
         const res = await fetch(CKAN_URL, {
@@ -171,6 +206,10 @@ async function fetchSkating() {
     try {
         console.log("Fetching ArcGIS Skate Locations...");
         const locRes = await fetch("https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services/Skate_Locations_v2/FeatureServer/0/query?f=json&where=1=1&returnGeometry=true&outFields=locationid,location&outSR=4326&resultRecordCount=2000");
+        if (!locRes.ok) {
+            console.warn(`Skate Locations returned ${locRes.status}`);
+            return null;
+        }
         const locBody = await locRes.json();
         
         const locMap = {};
@@ -186,12 +225,28 @@ async function fetchSkating() {
 
         console.log("Fetching CKAN drop-in dataset metadata...");
         const metaRes = await fetch("https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=registered-programs-and-drop-in-courses-offering");
+        if (!metaRes.ok) {
+            console.warn(`Drop-in metadata returned ${metaRes.status}`);
+            return null;
+        }
         const metaBody = await metaRes.json();
-        const dropInRes = metaBody.result.resources.find(r => r.name === 'Drop-in.json');
+        const dropInRes = metaBody.result?.resources?.find(r => r.name === 'Drop-in.json');
+        if (!dropInRes) {
+            console.warn("Drop-in.json resource not found in CKAN dataset");
+            return null;
+        }
 
         console.log("Fetching actual Drop-in schedules...");
         const dropRes = await fetch(dropInRes.url);
+        if (!dropRes.ok) {
+            console.warn(`Drop-in schedules returned ${dropRes.status}`);
+            return null;
+        }
         const dropIns = await dropRes.json();
+        if (!Array.isArray(dropIns)) {
+            console.warn("Drop-in schedules were not an array");
+            return null;
+        }
         
         const todayStr = new Date().toISOString().split('T')[0];
         const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
@@ -218,16 +273,67 @@ async function fetchSkating() {
             }
         }
         
+        // Genuinely empty is plausible here (summer, no ice), so an empty list
+        // is a valid result rather than a failure.
         console.log(`Skating: found ${activeSkating.length} drop-in sessions upcoming`);
         return activeSkating;
     } catch (e) {
         console.warn("Skating fetch failed:", e.message);
-        return [];
+        return null;
     }
+}
+
+// Reads the file left behind by the previous run (restored from the Actions
+// cache) so a failing source can fall back to its last known-good data.
+function readPrevious() {
+    try {
+        if (!fs.existsSync(OUT_FILE)) return {};
+        const parsed = JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch (e) {
+        console.warn(`Could not read existing ${OUT_FILE}: ${e.message}`);
+        return {};
+    }
+}
+
+// A fetcher returning null means "failed", which is different from returning []
+// ("succeeded, nothing to report"). Only the former falls back to the previous
+// run's data. There is no invented data: if a source has never succeeded, its
+// list is empty and the app simply shows no card.
+//
+// Carrying entries forward is safe because app.js filters every list by date
+// on-device, so expired items stop rendering on their own. `fetched` records
+// when the data was actually retrieved, so stale data is never passed off as
+// current.
+function pick(key, label, fresh, previous, now, degraded, { disabled = false } = {}) {
+    const previousFetch = previous.sources?.[key]?.fetched || previous.lastUpdated || null;
+
+    if (fresh !== null) {
+        return { value: fresh, meta: { fetched: now } };
+    }
+
+    const cached = previous[key];
+
+    // Disabled sources aren't failures — don't log a warning or count them
+    // against the run, just carry forward whatever was last cached (or empty).
+    if (disabled) {
+        return { value: Array.isArray(cached) ? cached : [], meta: { fetched: previousFetch, stale: true, disabled: true } };
+    }
+
+    degraded.push(label);
+    if (Array.isArray(cached) && cached.length > 0) {
+        console.log(`::warning title=${label} unavailable::Carrying forward ${cached.length} entries last fetched ${previousFetch || 'unknown'}`);
+        return { value: cached, meta: { fetched: previousFetch, stale: true } };
+    }
+
+    console.log(`::warning title=${label} unavailable::No previous data — this section will be empty`);
+    return { value: [], meta: { fetched: previousFetch, stale: true } };
 }
 
 async function main() {
     console.log("--- HowFar Events Fetcher ---");
+
+    const previous = readPrevious();
 
     const [npsData, ckanFestivals, skatingData] = await Promise.all([
         fetchNpsEvents(),
@@ -235,32 +341,53 @@ async function main() {
         fetchSkating()
     ]);
 
-    const festivals = ckanFestivals || HARDCODED_FESTIVALS;
+    const now = new Date().toISOString();
+    const degraded = [];
+    const nps = pick('npSquare', 'NP Square events', npsData, previous, now, degraded);
+    const fest = pick('festivals', 'Festivals', ckanFestivals, previous, now, degraded, { disabled: !FESTIVALS_ENABLED });
+    const skate = pick('skating', 'Drop-in skating', skatingData, previous, now, degraded);
 
     const output = {
-        lastUpdated: new Date().toISOString(),
-        npSquare: npsData,
-        festivals,
-        skating: skatingData
+        lastUpdated: now,
+        // Per-source retrieval times, so stale sections are identifiable from the
+        // deployed file rather than only from the workflow log.
+        sources: {
+            npSquare: nps.meta,
+            festivals: fest.meta,
+            skating: skate.meta
+        },
+        npSquare: nps.value,
+        festivals: fest.value,
+        skating: skate.value
     };
 
-    fs.writeFileSync('toronto_events.json', JSON.stringify(output, null, 0));
-    console.log(`Wrote toronto_events.json (${festivals.length} festivals, NPS: ${npsData.length} events)`);
+    fs.writeFileSync(OUT_FILE, JSON.stringify(output, null, 0));
+    console.log(`Wrote ${OUT_FILE} (NPS: ${nps.value.length}, festivals: ${fest.value.length}, skating: ${skate.value.length})`);
+
+    if (degraded.length > 0) {
+        console.log(`::warning title=Degraded event data::${degraded.length} source(s) failed: ${degraded.join(', ')}`);
+    } else {
+        console.log("All enabled sources fetched successfully.");
+    }
 }
 
 main().catch(e => {
-    console.error("Fatal error:", e);
-    if (fs.existsSync('toronto_events.json')) {
-        console.log("Preserving cached toronto_events.json from a previous successful run.");
+    console.log(`::error title=Events fetcher crashed::${e.message}`);
+    console.error(e);
+
+    if (fs.existsSync(OUT_FILE)) {
+        console.log(`Preserving existing ${OUT_FILE} from a previous run.`);
         process.exit(0);
     }
-    // Write a minimal fallback so the app still has something
-    const fallback = {
+    // Nothing to fall back on — write an empty but well-formed file so the app
+    // reads valid JSON and just renders no event cards.
+    const empty = { fetched: null, stale: true };
+    fs.writeFileSync(OUT_FILE, JSON.stringify({
         lastUpdated: new Date().toISOString(),
+        sources: { npSquare: empty, festivals: empty, skating: empty },
         npSquare: [],
-        festivals: HARDCODED_FESTIVALS,
+        festivals: [],
         skating: []
-    };
-    fs.writeFileSync('toronto_events.json', JSON.stringify(fallback, null, 0));
-    process.exit(0); // don't fail the workflow — fallback data is still useful
+    }, null, 0));
+    process.exit(0); // don't block the deploy — fallback data is still useful
 });

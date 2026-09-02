@@ -12,9 +12,10 @@ permissions:
   pages: write
   id-token: write
 
+# Let an in-flight deploy finish rather than cancelling it partway.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
@@ -24,36 +25,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: Restore cached toronto_events.json
+      # Rolling cache of the last good events file: the unique primary key always
+      # misses so the post-job save always runs, while restore-keys pulls in the
+      # newest previous entry. fetch_events.js reads it to fall back per-source
+      # when a city API is down.
+      - name: Cache toronto_events.json
         uses: actions/cache@v4
         with:
           path: toronto_events.json
-          key: toronto-events-${{ github.run_id }}
-          restore-keys: |
-            toronto-events-
+          key: toronto-events-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: toronto-events-
 
       - name: Fetch Toronto events
-        run: node fetch_events.js
-
-      - name: Cache toronto_events.json
-        uses: actions/cache/save@v4
-        with:
-          path: toronto_events.json
-          key: toronto-events-${{ github.run_id }}
-
-      - name: Allow toronto_events.json to be deployed
-        run: sed -i '/toronto_events.json/d' .gitignore
+        run: |
+          npm install
+          node fetch_events.js
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
