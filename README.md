@@ -25,10 +25,10 @@ behaves like a native app, offline cache included.
 
 ## Readme Sections
 
-| Section                                | What's there                                  |
-| -------------------------------------- | --------------------------------------------- |
-| [Cards](#cards)                         | What each card shows, and the ⋮ menu options |
-| [How it works](#how-it-works)           | Static site, two data files, two cadences     |
+| Section                                 | What's there                                  |
+| -----------------------------------------| -----------------------------------------------|
+| [Cards](#cards)                         | What each card shows, and the ⋮ menu options  |
+| [How it works](#how-it-works)           | Static site, three data files, three cadences |
 | [Failure handling](#failure-handling)   | How a dead API degrades instead of breaking   |
 | [Notable quirks](#notable-quirks)       | Things that look like bugs but aren't         |
 | [Future directions](#future-directions) | Ideas not yet built                           |
@@ -43,13 +43,15 @@ behaves like a native app, offline cache included.
 | Bikes      | Bike Share bikes available, return docks available |
 | TTC        | Metro station, streetcar (N/S), streetcar (E/W)    |
 | Facilities | Public library, park, drop-in skate                |
-| Other      | NP Square events, concerts, sports, Tim Hortons    |
+| Cafes      | Laptop Friendly, Tim Hortons                       |
+| Culture    | NP Square events, concerts, sports                 |
 
 The four event cards (NP Square, concerts, sports, skating) show a **+** beside
 the title when two or more options are on today, expanding to list the rest.
 
-Preferences live in `localStorage` and are set from the ⋮ menu: bike type
-(regular / electric / both), hide TTC, show 19+ drop-in skates, and hide sports.
+Preferences live in `localStorage` and are set from the ⋮ menu: which section
+appears first (places / events), bike type (regular / electric / both), hide TTC,
+show 19+ drop-in skates, and hide sports.
 
 ## How it works
 
@@ -59,13 +61,14 @@ evaluated against the user's actual position and clock. A daily GitHub Action
 fetches event data from city APIs and Ticketmaster, bakes it into a JSON file
 and deploys the site — so the data stays fresh without any server to maintain.
 
-Data arrives via two pre-generated JSON files, on very different cadences:
+Data arrives via three pre-generated JSON files, on different cadences:
 
 ```
-generate_data.py  --(manual, occasional)-->  toronto_data.json    (committed)
-fetch_events.js   --(GitHub Actions, daily)-->  toronto_events.json  (gitignored)
-                                                      |
-                                    index.html + app.js reads both
+generate_data.py          --(manual, occasional)--> toronto_data.json
+fetch_events.js           --(GitHub Actions, daily)--> toronto_events.json
+fetch_laptop_friendly.js  --(GitHub Actions, weekly)-> toronto_laptop_friendly.json
+                                                           |
+                                         index.html + app.js reads all three
 ```
 
 ### toronto_data.json — static POIs
@@ -104,6 +107,7 @@ Run it locally with:
 ```sh
 npm install
 TICKETMASTER_API_KEY=... node fetch_events.js
+node fetch_laptop_friendly.js --force
 ```
 
 Without the key, concerts and sports skip cleanly and the rest still runs.
@@ -161,7 +165,6 @@ Ideas not yet built, roughly in order of appeal:
 - **Small live-music venues and bars** — the clubs Ticketmaster doesn't list
   (Horseshoe, Cameron House, Dakota, El Mocambo). No clean API exists, so this
   likely means per-venue scrapers.
-- **Laptop-friendly cafes** — a card for the nearest spot to sit and work.
 - **An inspiration section for activities** — a browse mode that just opens a
   Maps search for a category, no nearest-of calculation.
 - **A better park database** — the current source has some false entries to
@@ -176,14 +179,15 @@ app.js              all client logic: geolocation, ranking, rendering
 style.css           dark glass-card theme
 sw.js               service worker, precache + stale-while-revalidate
 manifest.json       PWA manifest (standalone, scoped to /HowFar/)
-generate_data.py    manual: builds toronto_data.json
-fetch_events.js     daily in CI: builds toronto_events.json
+generate_data.py              manual: builds toronto_data.json
+fetch_events.js               daily in CI: builds toronto_events.json
+fetch_laptop_friendly.js      weekly in CI: builds toronto_laptop_friendly.json
 .github/workflows/deploy.yml
 ```
 
 Runtime dependencies are CDN-loaded (Leaflet for the mini-map, Font Awesome,
-Inter) — there is no build step or bundler. `npm install` exists only for
-`fetch_events.js`.
+Inter) — there is no build step or bundler. `npm install` exists only for the
+server-side data scripts.
 
 Live APIs called from the browser: Open-Meteo (weather + air quality),
 Bike Share Toronto GBFS, Nominatim (reverse geocoding), ipapi.co (fallback
@@ -191,8 +195,10 @@ location when GPS is denied), CARTO basemap tiles.
 
 ## Deploying
 
-Push to `master`. The workflow fetches events, uploads the whole directory as a
-Pages artifact and deploys. The daily cron does the same on a schedule.
+Push to `master`. The workflow fetches daily events, refreshes Laptop Friendly
+venues when their cached file is at least seven days old, uploads the whole
+directory as a Pages artifact and deploys. The daily cron does the same on a
+schedule.
 
 For concerts and sports, set the API key once:
 

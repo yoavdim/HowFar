@@ -42,10 +42,11 @@ const facilitiesConfigs = [
     { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'facilities' },
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'facilities' },
     { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'facilities' },
-    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'other' },
-    { id: 'concert', name: 'Concerts', icon: 'fa-music', color: '#8B5CF6', group: 'other' },
-    { id: 'sports', name: 'Sports', icon: 'fa-basketball', color: '#8B5CF6', group: 'other' },
-    { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'other' }
+    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'culture' },
+    { id: 'concert', name: 'Concerts', icon: 'fa-music', color: '#8B5CF6', group: 'culture' },
+    { id: 'sports', name: 'Sports', icon: 'fa-basketball', color: '#8B5CF6', group: 'culture' },
+    { id: 'laptop-friendly', name: 'Laptop Friendly', icon: 'fa-laptop', color: '#F59E0B', group: 'cafes' },
+    { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'cafes' }
 ];
 
 // Per-team icon for the sports card, since one card covers three sports.
@@ -53,14 +54,26 @@ const TEAM_ICONS = { jays: 'fa-baseball', leafs: 'fa-hockey-puck', raptors: 'fa-
 
 // Cards where "happening now/today" is conveyed by the timing on row 3 rather
 // than by the name on row 2, so the green highlight belongs on the subtitle.
-const HIGHLIGHTS_SUBTITLE = new Set(['skating', 'concert', 'sports']);
+const HIGHLIGHTS_SUBTITLE = new Set(['skating', 'concert', 'sports', 'laptop-friendly']);
 
 // No ticket prices: Discovery API returns no priceRanges for Toronto events
 // (verified 0/100 across all segments), and the Inventory Status API that does
 // carry Canadian pricing needs authorized access. Cards link out to
 // Ticketmaster, where the real price lives.
 
-const facilityGroups = ['bikes', 'ttc', 'facilities', 'other'];
+const PLACE_GROUPS = ['bikes', 'ttc', 'facilities', 'cafes'];
+
+function orderedFacilityGroups() {
+    return getSectionOrderPref() === 'events'
+        ? ['culture', ...PLACE_GROUPS]
+        : [...PLACE_GROUPS, 'culture'];
+}
+
+function groupPromptHtml(group) {
+    if (group === 'bikes') return '<div class="prompt-text group-prompt">Where shall we go?</div>';
+    if (group === 'culture') return '<div class="prompt-text group-prompt">Todays Events</div>';
+    return '';
+}
 
 // Nathan Phillips Square is a single fixed venue, so its coordinates are known
 // rather than fetched.
@@ -265,10 +278,11 @@ function skeletonItem(config) {
 
 function renderSkeletonCards() {
     const list = document.getElementById('facilities-list');
-    list.innerHTML = facilityGroups.map(group => {
+    list.innerHTML = orderedFacilityGroups().map(group => {
         const configs = visibleConfigs(group);
         if (!configs.length) return '';
-        return `<div class="facility-group glass-card">${configs.map(skeletonItem).join('<div class="group-divider"></div>')}</div>`;
+        return groupPromptHtml(group)
+            + `<div class="facility-group glass-card">${configs.map(skeletonItem).join('<div class="group-divider"></div>')}</div>`;
     }).join('');
 }
 
@@ -305,6 +319,93 @@ function rankOptions(items, { tiered = false } = {}) {
         ...ranked.filter(e => e.isMajorVenue).sort(byDistance),
         ...ranked.filter(e => !e.isMajorVenue).sort(byDistance),
     ];
+}
+
+const LAPTOP_DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+function formatLaptopHours(venue, dayKey) {
+    const hours = venue.hours?.[dayKey] || 'Unknown';
+    if (hours === 'Unknown') return 'Hours unknown';
+    return hours;
+}
+
+function laptopVenueStatus(venue, now = new Date()) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Toronto',
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+    }).formatToParts(now).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+    const dayKey = parts.weekday.toLowerCase();
+    const dayIndex = LAPTOP_DAY_KEYS.indexOf(dayKey);
+    const nowMinutes = Number(parts.hour) * 60 + Number(parts.minute);
+    const currentHours = venue.hours?.[dayKey] || 'Unknown';
+
+    const range = hours => {
+        const match = String(hours).match(/^(\d{2}):(\d{2}) – (\d{2}):(\d{2})$/);
+        if (!match) return null;
+        return {
+            opens: Number(match[1]) * 60 + Number(match[2]),
+            closes: Number(match[3]) * 60 + Number(match[4]),
+        };
+    };
+
+    if (currentHours === 'Open 24 hours') {
+        return { isOpen: true, text: currentHours };
+    }
+    const currentRange = range(currentHours);
+    if (currentRange) {
+        const openNow = currentRange.closes > currentRange.opens
+            ? nowMinutes >= currentRange.opens && nowMinutes < currentRange.closes
+            : nowMinutes >= currentRange.opens;
+        if (openNow) return { isOpen: true, text: currentHours };
+    }
+
+    // After midnight, an overnight session belongs to yesterday's schedule.
+    const previousDay = LAPTOP_DAY_KEYS[(dayIndex + 6) % 7];
+    const previousHours = venue.hours?.[previousDay];
+    const previousRange = range(previousHours);
+    if (previousRange
+        && previousRange.closes <= previousRange.opens
+        && nowMinutes < previousRange.closes) {
+        const dayLabel = previousDay[0].toUpperCase() + previousDay.slice(1);
+        return { isOpen: true, text: `${dayLabel} ${previousHours}` };
+    }
+
+    return { isOpen: false, text: formatLaptopHours(venue, dayKey) };
+}
+
+function laptopFriendlyResult(venues) {
+    const ranked = rankOptions(venues || []);
+    if (!ranked.length) return null;
+
+    const now = new Date();
+    const toAlternative = venue => {
+        const status = laptopVenueStatus(venue, now);
+        return {
+            name: venue.name,
+            meta: status.text,
+            isActive: status.isOpen,
+            distance: venue.distance,
+            origLat: venue.lat,
+            origLon: venue.lon,
+            externalUrl: venue.url,
+        };
+    };
+    const selected = ranked[0];
+    const selectedStatus = laptopVenueStatus(selected, now);
+    return {
+        distance: selected.distance,
+        origLat: selected.lat,
+        origLon: selected.lon,
+        title: selected.name,
+        subtitle: selectedStatus.text,
+        isActive: selectedStatus.isOpen,
+        externalUrl: selected.url,
+        alternativesLabel: 'venues',
+        alternatives: ranked.slice(1).map(toAlternative),
+    };
 }
 
 // Ticketmaster events happening today that have not started yet.
@@ -615,6 +716,10 @@ async function fetchAllData() {
             results['tim-hortons'] = findNearestOf(data['tim-hortons'], () => true);
         }
 
+        if (data.laptopFriendly) {
+            results['laptop-friendly'] = laptopFriendlyResult(data.laptopFriendly);
+        }
+
         // Hardcoded municipal item — np-square is always available
         if (liveNpEvent !== undefined) {
             results['np-square'] = {
@@ -698,6 +803,19 @@ async function fetchAllData() {
         }
     })();
 
+    const laptopFriendlyPromise = (async () => {
+        try {
+            const res = await fetch('toronto_laptop_friendly.json');
+            if (!res.ok) throw new Error('Failed to load Laptop Friendly data');
+            const parsed = await res.json();
+            data.laptopFriendly = Array.isArray(parsed.venues) ? parsed.venues : [];
+            computeCards();
+            render();
+        } catch (e) {
+            console.error('Laptop Friendly data load failed', e);
+        }
+    })();
+
     const bikePromise = fetchBikeShareData(setBikeResults);
 
     let liveNpEvent = null;
@@ -718,7 +836,7 @@ async function fetchAllData() {
         }
     })();
 
-    await Promise.allSettled([overpassPromise, bikePromise, eventsPromise]);
+    await Promise.allSettled([overpassPromise, laptopFriendlyPromise, bikePromise, eventsPromise]);
 
     appDone = true;
     computeCards();
@@ -758,7 +876,22 @@ let currentBikes = null;
 
 // Bike preference: 'regular' | 'electric' | 'both'
 const BIKE_TYPE_KEY = 'howfar-bike-type';
+const SECTION_ORDER_KEY = 'howfar-section-order';
 const HIDE_TTC_KEY = 'howfar-hide-ttc';
+
+function getSectionOrderPref() {
+    try {
+        return localStorage.getItem(SECTION_ORDER_KEY) === 'events' ? 'events' : 'places';
+    } catch (e) {
+        return 'places';
+    }
+}
+
+function setSectionOrderPref(section) {
+    try {
+        localStorage.setItem(SECTION_ORDER_KEY, section === 'events' ? 'events' : 'places');
+    } catch (e) { }
+}
 
 function getHideTtcPref() {
     try {
@@ -902,6 +1035,21 @@ function initMenu() {
         }
     }));
 
+    const sectionOptions = dropdown.querySelectorAll('.section-order-option');
+    const setSectionActive = section => sectionOptions.forEach(option => {
+        const active = option.dataset.sectionOrder === section;
+        option.classList.toggle('active', active);
+        option.setAttribute('aria-pressed', String(active));
+    });
+    setSectionActive(getSectionOrderPref());
+
+    sectionOptions.forEach(option => option.addEventListener('click', () => {
+        const section = option.dataset.sectionOrder;
+        setSectionOrderPref(section);
+        setSectionActive(section);
+        renderResults(appResults, appDone);
+    }));
+
     const ttcToggle = document.getElementById('hide-ttc-toggle');
     if (ttcToggle) {
         ttcToggle.checked = getHideTtcPref();
@@ -1040,8 +1188,9 @@ function bikeStatusText(item, cardId) {
 function expandToggleHtml(config, item) {
     if (!item?.alternatives?.length) return '';
     const open = expandedCards.has(config.id);
+    const label = item.alternativesLabel || 'more today';
     return `<button type="button" class="expand-btn" aria-expanded="${open}"`
-        + ` aria-label="${open ? 'Hide' : 'Show'} ${item.alternatives.length} more today"`
+        + ` aria-label="${open ? 'Hide' : 'Show'} ${item.alternatives.length} ${label}"`
         + ` onclick="event.preventDefault(); event.stopPropagation(); toggleCardExpand('${config.id}')">`
         + `<i class="fa-solid ${open ? 'fa-minus' : 'fa-plus'}"></i></button>`;
 }
@@ -1059,20 +1208,21 @@ function alternativesHtml(config, item) {
             : isIOS
                 ? `comgooglemaps://?daddr=${alt.origLat},${alt.origLon}&directionsmode=walking`
                 : `https://www.google.com/maps/dir/?api=1&destination=${alt.origLat},${alt.origLon}&travelmode=walking`;
-        const ticket = alt.ticketUrl
-            ? `<a href="${alt.ticketUrl}" ${targetAttr} class="alt-ticket" aria-label="Tickets"
-                  onclick="event.stopPropagation();"><i class="fa-solid fa-ticket"></i></a>`
+        const externalUrl = alt.externalUrl || alt.ticketUrl;
+        const externalLink = externalUrl
+            ? `<a href="${externalUrl}" ${targetAttr} class="alt-ticket" aria-label="${alt.ticketUrl ? 'Tickets' : 'Venue page'}"
+                  onclick="event.stopPropagation();"><i class="fa-solid ${alt.ticketUrl ? 'fa-ticket' : 'fa-arrow-up-right-from-square'}"></i></a>`
             : '';
         return `
             <div class="facility-alt-row">
                 <a href="${mapUrl}" ${targetAttr} data-nav-type="${isAndroid ? 'android' : isIOS ? 'ios' : 'web'}" data-name="${config.name}" class="facility-alt-link">
                     <div class="facility-alt-details">
                         <div class="facility-alt-name">${alt.name}</div>
-                        <div class="facility-alt-meta">${alt.meta}</div>
+                        <div class="facility-alt-meta"${alt.isActive ? ' style="color: var(--success-color); font-weight: 500;"' : ''}>${alt.meta}</div>
                     </div>
                     <div class="facility-alt-dist">${formatDistance(alt.distance)}</div>
                 </a>
-                ${ticket}
+                ${externalLink}
             </div>`;
     }).join('');
 
@@ -1131,8 +1281,8 @@ function renderFacilityItem(config, results, isDone) {
         iconHref = "https://www.toronto.ca/services-payments/venues-facilities-bookings/booking-city-facilities/city-squares/nathan-phillips-square/events-happening-on-nathan-phillips-square/";
     } else if (config.id === 'skating') {
         iconHref = "https://www.toronto.ca/explore-enjoy/parks-recreation/program-activities/ice-snow-activities/public-leisure-skating/";
-    } else if (item.ticketUrl) {
-        iconHref = item.ticketUrl;
+    } else if (item.externalUrl || item.ticketUrl) {
+        iconHref = item.externalUrl || item.ticketUrl;
     } else if (isAndroid || isIOS) {
         if (isBike) iconHref = bikeAppUrl;
         else if (isTransit) iconHref = walletAppUrl;
@@ -1179,12 +1329,13 @@ function renderResults(results, isDone = false) {
     const list = document.getElementById('facilities-list');
     const hideTtc = getHideTtcPref();
 
-    list.innerHTML = facilityGroups.map(group => {
+    list.innerHTML = orderedFacilityGroups().map(group => {
         if (group === 'ttc' && hideTtc) return '';
         const configs = visibleConfigs(group);
         if (!configs.length) return '';
         const items = configs.map(config => renderFacilityItem(config, results, isDone));
-        return `<div class="facility-group glass-card">${items.join('<div class="group-divider"></div>')}</div>`;
+        return groupPromptHtml(group)
+            + `<div class="facility-group glass-card">${items.join('<div class="group-divider"></div>')}</div>`;
     }).join('');
 }
 

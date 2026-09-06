@@ -1,4 +1,4 @@
-const CACHE_NAME = 'howfar-cache-v4';
+const CACHE_NAME = 'howfar-cache-v5';
 
 const CACHE_ASSETS = [
     './',
@@ -7,10 +7,17 @@ const CACHE_ASSETS = [
     './app.js',
     './toronto_data.json',
     './toronto_events.json',
+    './toronto_laptop_friendly.json',
     './manifest.json',
     './icon-192.png',
     './icon-512.png',
     './icon.png'
+];
+
+const GENERATED_DATA = [
+    'toronto_data.json',
+    'toronto_events.json',
+    'toronto_laptop_friendly.json'
 ];
 
 // Install Event
@@ -51,6 +58,26 @@ self.addEventListener('fetch', (e) => {
         !url.origin.includes('unpkg.com') && 
         !url.origin.includes('cdnjs.cloudflare.com') &&
         !url.origin.includes('cartocdn.com')) {
+        return;
+    }
+
+    // Generated data should be fresh on the first visit after a deployment.
+    // Fall back to the precached copy only when the network is unavailable.
+    if (url.origin === location.origin && GENERATED_DATA.some(file => url.pathname.endsWith(file))) {
+        e.respondWith(
+            fetch(e.request)
+                .then(networkResponse => {
+                    if (!networkResponse || networkResponse.status !== 200) {
+                        throw new Error(`HTTP ${networkResponse?.status || 'error'}`);
+                    }
+                    const responseClone = networkResponse.clone();
+                    return caches.open(CACHE_NAME).then(cache => {
+                        cache.put(e.request, responseClone);
+                        return networkResponse;
+                    });
+                })
+                .catch(() => caches.match(e.request))
+        );
         return;
     }
 

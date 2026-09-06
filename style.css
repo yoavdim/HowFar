@@ -279,12 +279,14 @@ body {
     margin-bottom: 0.85rem;
 }
 
-.bike-type-options {
+.bike-type-options,
+.section-order-options {
     display: flex;
     gap: 0.35rem;
 }
 
-.bike-type-option {
+.bike-type-option,
+.section-order-option {
     flex: 1;
     padding: 0.45rem 0;
     border-radius: 8px;
@@ -297,11 +299,13 @@ body {
     transition: all 0.15s ease;
 }
 
-.bike-type-option:hover {
+.bike-type-option:hover,
+.section-order-option:hover {
     background: rgba(255, 255, 255, 0.1);
 }
 
-.bike-type-option.active {
+.bike-type-option.active,
+.section-order-option.active {
     background: var(--accent-color);
     color: #0F172A;
     border-color: var(--accent-color);
@@ -400,6 +404,10 @@ body {
     letter-spacing: -0.02em;
     animation: promptFadeIn 0.8s ease-out 0.2s forwards;
     filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));
+}
+
+.group-prompt {
+    margin: 0;
 }
 
 @keyframes promptFadeIn {
