@@ -66,7 +66,7 @@ Data arrives via three pre-generated JSON files, on different cadences:
 ```
 generate_data.py          --(manual, occasional)--> toronto_data.json
 fetch_events.js           --(GitHub Actions, daily)--> toronto_events.json
-fetch_laptop_friendly.js  --(GitHub Actions, weekly)-> toronto_laptop_friendly.json
+fetch_laptop_friendly.js  --(GitHub Actions, every 4 weeks)-> toronto_laptop_friendly.json
                                                            |
                                          index.html + app.js reads all three
 ```
@@ -181,7 +181,7 @@ sw.js               service worker, precache + stale-while-revalidate
 manifest.json       PWA manifest (standalone, scoped to /HowFar/)
 generate_data.py              manual: builds toronto_data.json
 fetch_events.js               daily in CI: builds toronto_events.json
-fetch_laptop_friendly.js      weekly in CI: builds toronto_laptop_friendly.json
+fetch_laptop_friendly.js      every 4 weeks in CI: builds toronto_laptop_friendly.json
 .github/workflows/deploy.yml
 ```
 
@@ -196,7 +196,7 @@ location when GPS is denied), CARTO basemap tiles.
 ## Deploying
 
 Push to `master`. The workflow fetches daily events, refreshes Laptop Friendly
-venues when their cached file is at least seven days old, uploads the whole
+venues when their cached file is at least four weeks old, uploads the whole
 directory as a Pages artifact and deploys. The daily cron does the same on a
 schedule.
 

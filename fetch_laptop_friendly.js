@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Scrapes Laptop Friendly's Toronto directory for the app's weekly venue data.
+// Scrapes Laptop Friendly's Toronto directory every four weeks for the app's venue data.
 // Venue pages server-render coordinates in JSON-LD and a seven-day hours table,
 // so this does not need browser automation or a geocoding service.
 
@@ -9,7 +9,7 @@ const fetch = require('node-fetch');
 const DIRECTORY_URL = 'https://laptopfriendly.co/toronto';
 const BASE_URL = 'https://laptopfriendly.co';
 const OUT_FILE = 'toronto_laptop_friendly.json';
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const FOUR_WEEKS_MS = 4 * 7 * 24 * 60 * 60 * 1000;
 const CONCURRENCY = 4;
 const MIN_VENUES = 25;
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -156,13 +156,13 @@ function recentOutput() {
         && data.venues.length >= MIN_VENUES
         && data.venues.every(isVenueWellFormatted)
         && Number.isFinite(fetchedAt)
-        && Date.now() - fetchedAt < WEEK_MS;
+        && Date.now() - fetchedAt < FOUR_WEEKS_MS;
 }
 
 async function main() {
     console.log('--- HowFar Laptop Friendly Fetcher ---');
     if (recentOutput()) {
-        console.log(`${OUT_FILE} is less than seven days old; skipping scrape.`);
+        console.log(`${OUT_FILE} is less than four weeks old; skipping scrape.`);
         return;
     }
 

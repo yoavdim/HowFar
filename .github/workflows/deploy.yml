@@ -5,7 +5,13 @@ on:
     branches: [master]
   schedule:
     - cron: '0 6 * * *'  # 6am UTC / 2am Toronto — once daily
-  workflow_dispatch:       # manual trigger
+  workflow_dispatch:
+    inputs:
+      force_laptop_friendly_refresh:
+        description: Force a Laptop Friendly scrape, ignoring the four-week refresh interval
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -58,10 +64,16 @@ jobs:
           npm install
           node fetch_events.js
 
-      # The deploy still runs daily for events; this scraper checks its cached
-      # timestamp and only contacts Laptop Friendly once every seven days.
+      # The deploy still runs daily for events; the scraper normally contacts
+      # Laptop Friendly only once every four weeks. Manual dispatch can force a
+      # scrape to verify or refresh the cached venue data immediately.
       - name: Fetch Laptop Friendly venues
-        run: node fetch_laptop_friendly.js
+        run: |
+          if [ "${{ inputs.force_laptop_friendly_refresh }}" = "true" ]; then
+            node fetch_laptop_friendly.js --force
+          else
+            node fetch_laptop_friendly.js
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

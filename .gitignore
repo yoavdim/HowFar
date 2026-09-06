@@ -2,3 +2,4 @@ node_modules/
 gtfs_data/
 package-lock.json
 toronto_events.json
+toronto_laptop_friendly.json

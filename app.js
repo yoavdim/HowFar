@@ -71,7 +71,7 @@ function orderedFacilityGroups() {
 
 function groupPromptHtml(group) {
     if (group === 'bikes') return '<div class="prompt-text group-prompt">Where shall we go?</div>';
-    if (group === 'culture') return '<div class="prompt-text group-prompt">Todays Events</div>';
+    if (group === 'culture') return '<div class="prompt-text group-prompt">Today’s Events</div>';
     return '';
 }
 
