@@ -38,16 +38,17 @@ behaves like a native app, offline cache included.
 
 ## Cards
 
-| Group      | Cards                                              |
-| ---------- | -------------------------------------------------- |
-| Bikes      | Bike Share bikes available, return docks available |
-| TTC        | Metro station, streetcar (N/S), streetcar (E/W)    |
-| Facilities | Public library, park, drop-in skate                |
-| Cafes      | Laptop Friendly, Tim Hortons                       |
-| Culture    | NP Square events, concerts, sports                 |
+| Group      | Cards                                                      |
+| ------------| ------------------------------------------------------------|
+| Bikes      | Bike Share bikes available, return docks available         |
+| TTC        | Metro station, streetcar (N/S), streetcar (E/W)            |
+| Facilities | Public library, park, drop-in skate                        |
+| Cafes      | Laptop Friendly, Tim Hortons                               |
+| Events     | NP Square + festivals; concerts + sports + games + parties |
 
-The four event cards (NP Square, concerts, sports, skating) show a **+** beside
-the title when two or more options are on today, expanding to list the rest.
+The seven event cards (NP Square, festivals, concerts, sports, games, parties,
+and skating) show a **+** beside the title when two or more options are on today,
+expanding to list the rest.
 
 Preferences live in `localStorage` and are set from the ⋮ menu: which section
 appears first (places / events), bike type (regular / electric / both), hide TTC,
@@ -58,8 +59,9 @@ show 19+ drop-in skates, and hide sports.
 There is no backend. The site is static files on GitHub Pages, and all
 location logic runs in the browser so "nearest" and "today" are always
 evaluated against the user's actual position and clock. A daily GitHub Action
-fetches event data from city APIs and Ticketmaster, bakes it into a JSON file
-and deploys the site — so the data stays fresh without any server to maintain.
+fetches event data from City sources, Ticketmaster, and Eventbrite, bakes it
+into a JSON file and deploys the site—so the data stays fresh without any
+application backend.
 
 Data arrives via three pre-generated JSON files, on different cadences:
 
@@ -95,17 +97,18 @@ underlying data changes on the order of months.
 Built by `fetch_events.js` in GitHub Actions (6am UTC / 2am Toronto), plus on
 every push to `master`. Not committed; it only exists in the deployed artifact.
 
-| Source                            | Provides                      | Notes                         |
-| --------------------------------- | ----------------------------- | ----------------------------- |
-| toronto.ca NPS page               | Nathan Phillips Square events | HTML scrape                   |
-| Toronto Open Data (ArcGIS + CKAN) | Drop-in leisure skating       | Rink locations + schedules    |
-| Ticketmaster Discovery            | Concerts, sports              | Needs`TICKETMASTER_API_KEY` |
-| ~~Toronto Open Data festivals~~  | —                            | Disabled, see below           |
+| Source                            | Provides                                | Notes                         |
+| --------------------------------- | --------------------------------------- | ----------------------------- |
+| toronto.ca NPS page               | Nathan Phillips Square events           | HTML scrape                   |
+| Toronto Open Data (ArcGIS + CKAN) | Drop-in leisure skating                 | Rink locations + schedules    |
+| City of Toronto events feed       | Festivals                               | Parade + Street Festival JSON |
+| Ticketmaster Discovery            | Concerts, parties, sports               | Needs `TICKETMASTER_API_KEY`  |
+| Eventbrite Toronto search         | Festivals, games, parties               | JSON-LD plus embedded event times |
 
 Run it locally with:
 
 ```sh
-npm install
+npm ci
 TICKETMASTER_API_KEY=... node fetch_events.js
 node fetch_laptop_friendly.js --force
 ```
@@ -135,22 +138,11 @@ block deploying the site.
 
 Things that look wrong but are deliberate, and things that bit us:
 
-- **Festivals are disabled.** The Toronto Open Data festivals feed has been
-  Akamai-blocked (403) since ~2026-06-14, and the CKAN-hosted "backup" resource
-  serves a stale cached copy of that same error page. Every URL the dataset
-  publishes leads to the same dead host. `FESTIVALS_ENABLED` in
-  `fetch_events.js` flips it back if Toronto ever fixes it.
-- **No ticket prices.** Ticketmaster's Discovery API returns no `priceRanges`
-  for most events. The Inventory Status API does carry Canadian pricing
-  but requires authorized access. Cards link out to Ticketmaster instead.
 - **Ticketmaster is queried by `geoPoint` + a 60km radius, not `dmaId`.** The
   Toronto DMA both returned far-flung events (Thunder Bay, Windsor) and missed
   real Toronto ones. Tune the reach with `TORONTO_RADIUS_KM`.
 - **`rankOptions()` is the single ordering rule.** A card's chosen item is
   element `[0]` and the **+** list is the rest.
-  Each card supplies its own "available today" filter, because the predicate
-  genuinely differs: a concert is out once it has started, a drop-in skate only
-  once it has *ended*, and an NP Square event spans whole days.
 - **Concerts use two-tier ranking.** Arenas and stadiums outrank everything
   else, each group internally by distance, so a stadium show wins over a closer
   club night. Sports is a flat pool — the three teams rank equally.

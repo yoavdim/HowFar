@@ -42,9 +42,12 @@ const facilitiesConfigs = [
     { id: 'library', name: 'Public Library', icon: 'fa-book', color: '#10B981', group: 'facilities' },
     { id: 'park', name: 'Park', icon: 'fa-tree', color: '#10B981', group: 'facilities' },
     { id: 'skating', name: 'Drop-in Skate', icon: 'fa-person-skating', color: '#10B981', group: 'facilities' },
-    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'culture' },
+    { id: 'np-square', name: 'NP Square', icon: 'fa-landmark', color: '#8B5CF6', group: 'open_events' },
+    { id: 'festival', name: 'Festivals', icon: 'fa-masks-theater', color: '#8B5CF6', group: 'open_events' },
     { id: 'concert', name: 'Concerts', icon: 'fa-music', color: '#8B5CF6', group: 'culture' },
     { id: 'sports', name: 'Sports', icon: 'fa-basketball', color: '#8B5CF6', group: 'culture' },
+    { id: 'games', name: 'Games', icon: 'fa-chess-knight', color: '#8B5CF6', group: 'culture' },
+    { id: 'parties', name: 'Parties', icon: 'fa-compact-disc', color: '#8B5CF6', group: 'culture' },
     { id: 'laptop-friendly', name: 'Laptop Friendly', icon: 'fa-laptop', color: '#F59E0B', group: 'cafes' },
     { id: 'tim-hortons', name: 'Tim Hortons', icon: 'fa-mug-hot', color: '#F59E0B', group: 'cafes' }
 ];
@@ -54,7 +57,9 @@ const TEAM_ICONS = { jays: 'fa-baseball', leafs: 'fa-hockey-puck', raptors: 'fa-
 
 // Cards where "happening now/today" is conveyed by the timing on row 3 rather
 // than by the name on row 2, so the green highlight belongs on the subtitle.
-const HIGHLIGHTS_SUBTITLE = new Set(['skating', 'concert', 'sports', 'laptop-friendly']);
+const HIGHLIGHTS_SUBTITLE = new Set([
+    'skating', 'festival', 'concert', 'sports', 'games', 'parties', 'laptop-friendly'
+]);
 
 // No ticket prices: Discovery API returns no priceRanges for Toronto events
 // (verified 0/100 across all segments), and the Inventory Status API that does
@@ -65,13 +70,13 @@ const PLACE_GROUPS = ['bikes', 'ttc', 'facilities', 'cafes'];
 
 function orderedFacilityGroups() {
     return getSectionOrderPref() === 'events'
-        ? ['culture', ...PLACE_GROUPS]
-        : [...PLACE_GROUPS, 'culture'];
+        ? ['open_events', 'culture', ...PLACE_GROUPS]
+        : [...PLACE_GROUPS, 'open_events', 'culture'];
 }
 
 function groupPromptHtml(group) {
     if (group === 'bikes') return '<div class="prompt-text group-prompt">Where shall we go?</div>';
-    if (group === 'culture') return '<div class="prompt-text group-prompt">Today’s Events</div>';
+    if (group === 'open_events') return '<div class="prompt-text group-prompt">Today’s Events</div>';
     return '';
 }
 
@@ -286,13 +291,13 @@ function renderSkeletonCards() {
     }).join('');
 }
 
-// --- Ticketmaster event selection (concerts + sports) ---------------------
+// --- Event selection (concerts, sports, festivals, games + parties) --------
 
-// A TBA start time is fine for a future date, but meaningless for today — we
-// can't tell if it has already begun, so today's TBA events are dropped.
-function isEventStillUpcoming(ev, todayStr) {
-    if (ev.timeTBA || !ev.startUtc) return ev.localDate > todayStr;
-    return new Date(ev.startUtc).getTime() > Date.now();
+const END_RELEVANCE_TYPES = new Set(['festival', 'games', 'parties']);
+
+function isEventStillRelevant(ev, todayStr) {
+    const cutoff = END_RELEVANCE_TYPES.has(ev.eventType) ? ev.endUtc : ev.startUtc;
+    return cutoff ? Date.parse(cutoff) > Date.now() : (ev.endLocalDate || ev.localDate) >= todayStr;
 }
 
 function withDistance(items) {
@@ -408,10 +413,13 @@ function laptopFriendlyResult(venues) {
     };
 }
 
-// Ticketmaster events happening today that have not started yet.
-function ticketmasterToday(events, todayStr) {
-    return (events || []).filter(
-        ev => ev.localDate === todayStr && isEventStillUpcoming(ev, todayStr));
+// Events happening today that are still useful. Multi-day events remain
+// eligible through endLocalDate when no trustworthy cutoff time is available.
+function eventsToday(events, todayStr) {
+    return (events || []).filter(ev =>
+        ev.localDate <= todayStr
+        && todayStr <= (ev.endLocalDate || ev.localDate)
+        && isEventStillRelevant(ev, todayStr));
 }
 
 // Soonest first, distance only as a tiebreak within the same day. Used only for
@@ -429,14 +437,14 @@ function soonestThenNearest(events) {
 // Returns { selected, alternatives }. `alternatives` is only ever populated
 // from today's list, so a card showing a future event never offers a "+".
 function pickEvent(events, todayStr, { tiered = false } = {}) {
-    const todays = rankOptions(ticketmasterToday(events, todayStr), { tiered });
+    const todays = rankOptions(eventsToday(events, todayStr), { tiered });
     if (todays.length) {
         return { selected: todays[0], alternatives: todays.slice(1) };
     }
     if (!events?.length || userLat == null || userLon == null) {
         return { selected: null, alternatives: [] };
     }
-    const upcoming = events.filter(ev => isEventStillUpcoming(ev, todayStr));
+    const upcoming = events.filter(ev => isEventStillRelevant(ev, todayStr));
     return { selected: soonestThenNearest(upcoming), alternatives: [] };
 }
 
@@ -468,7 +476,14 @@ function npSquareToday(events, todayStr) {
 }
 
 function formatEventCard(ev, todayStr, iconOverride) {
-    const isToday = ev.localDate === todayStr;
+    const isToday = ev.localDate <= todayStr
+        && todayStr <= (ev.endLocalDate || ev.localDate);
+    const now = Date.now();
+    const startMs = Date.parse(ev.startUtc);
+    const endMs = Date.parse(ev.endUtc);
+    const isActive = Number.isFinite(startMs)
+        ? now >= startMs && (!Number.isFinite(endMs) || now < endMs)
+        : isToday;
     const time = (!ev.timeTBA && ev.startUtc)
         ? new Date(ev.startUtc).toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' })
         : null;
@@ -486,9 +501,28 @@ function formatEventCard(ev, todayStr, iconOverride) {
         overrideIcon: iconOverride || null,
         title: ev.name,
         subtitle: `${ev.venueName} · ${when}`,
-        isActive: isToday,
+        isActive,
         ticketUrl: ev.url || null
     };
+}
+
+function buildEventCard(events, todayStr, { tiered = false, iconFor = () => null } = {}) {
+    const pick = pickEvent(events, todayStr, { tiered });
+    if (!pick.selected) return null;
+
+    const card = formatEventCard(pick.selected, todayStr, iconFor(pick.selected));
+    card.alternatives = pick.alternatives.map(ev => {
+        const alternative = formatEventCard(ev, todayStr, iconFor(ev));
+        return {
+            name: alternative.title,
+            meta: alternative.subtitle,
+            distance: ev.distance,
+            origLat: ev.lat,
+            origLon: ev.lon,
+            ticketUrl: alternative.ticketUrl,
+        };
+    });
+    return card;
 }
 
 // Pre-generated events data — produced daily by fetch_events.js via GitHub Actions.
@@ -496,8 +530,11 @@ function formatEventCard(ev, todayStr, iconOverride) {
 async function fetchLiveEvents() {
     let npEvent = null;
     let nearestSkating = null;
+    let nearestFestival = null;
     let nearestConcert = null;
     let nearestSport = null;
+    let nearestGame = null;
+    let nearestParty = null;
 
     // Step 1: Try the pre-generated JSON (fast, same-origin, no CORS).
     try {
@@ -585,35 +622,34 @@ async function fetchLiveEvents() {
                 }
             }
 
-            // Concerts use the tiered rule; sports is a flat pool.
-            const concertPick = pickEvent(data.concerts, todayStr, { tiered: true });
-            if (concertPick.selected) {
-                nearestConcert = formatEventCard(concertPick.selected, todayStr);
-                nearestConcert.alternatives = concertPick.alternatives.map(ev => {
-                    const card = formatEventCard(ev, todayStr);
-                    return { name: card.title, meta: card.subtitle, distance: ev.distance,
-                             origLat: ev.lat, origLon: ev.lon, ticketUrl: card.ticketUrl };
-                });
-            }
-
-            const sportPick = pickEvent(data.sports, todayStr);
-            if (sportPick.selected) {
-                nearestSport = formatEventCard(sportPick.selected, todayStr, TEAM_ICONS[sportPick.selected.team]);
-                nearestSport.alternatives = sportPick.alternatives.map(ev => {
-                    const card = formatEventCard(ev, todayStr, TEAM_ICONS[ev.team]);
-                    return { name: card.title, meta: card.subtitle, distance: ev.distance,
-                             origLat: ev.lat, origLon: ev.lon, ticketUrl: card.ticketUrl };
-                });
-            }
+            // Concerts use the tiered rule; all other event pools are flat.
+            nearestFestival = buildEventCard(data.festivals, todayStr);
+            nearestConcert = buildEventCard(data.concerts, todayStr, { tiered: true });
+            nearestSport = buildEventCard(data.sports, todayStr, {
+                iconFor: event => TEAM_ICONS[event.team],
+            });
+            nearestGame = buildEventCard(data.games, todayStr);
+            nearestParty = buildEventCard(data.parties, todayStr);
 
             console.log("Loaded pre-generated toronto_events.json");
-            return { npEvent, nearestSkating, nearestConcert, nearestSport };
+            return {
+                npEvent, nearestSkating, nearestFestival, nearestConcert,
+                nearestSport, nearestGame, nearestParty,
+            };
         }
     } catch (e) {
         console.warn("toronto_events.json unavailable:", e.message);
     }
 
-    return { npEvent: null, nearestSkating: null, nearestConcert: null, nearestSport: null };
+    return {
+        npEvent: null,
+        nearestSkating: null,
+        nearestFestival: null,
+        nearestConcert: null,
+        nearestSport: null,
+        nearestGame: null,
+        nearestParty: null,
+    };
 }
 
 async function resolveLocationName(lat, lon) {
@@ -733,14 +769,12 @@ async function fetchAllData() {
             };
         }
         
-        // Concert + sports cards: like skating, only set once the events fetch
-        // has resolved, so they render as skeletons rather than "None found".
-        if (liveConcert !== undefined) {
-            results['concert'] = liveConcert || null;
-        }
-        if (liveSport !== undefined) {
-            results['sports'] = liveSport || null;
-        }
+        // Event cards are only populated after the daily event JSON resolves.
+        if (liveFestival !== undefined) results['festival'] = liveFestival || null;
+        if (liveConcert !== undefined) results['concert'] = liveConcert || null;
+        if (liveSport !== undefined) results['sports'] = liveSport || null;
+        if (liveGame !== undefined) results['games'] = liveGame || null;
+        if (liveParty !== undefined) results['parties'] = liveParty || null;
 
         // Skating card: waits for the events fetch, same as np-square above.
         if (liveSkating !== undefined) {
@@ -820,15 +854,24 @@ async function fetchAllData() {
 
     let liveNpEvent = null;
     let liveSkating = null;
+    let liveFestival = null;
     let liveConcert = null;
     let liveSport = null;
+    let liveGame = null;
+    let liveParty = null;
 
     const eventsPromise = (async () => {
-        const { npEvent, nearestSkating, nearestConcert, nearestSport } = await fetchLiveEvents();
+        const {
+            npEvent, nearestSkating, nearestFestival, nearestConcert,
+            nearestSport, nearestGame, nearestParty,
+        } = await fetchLiveEvents();
         liveNpEvent = npEvent;
         liveSkating = nearestSkating;
+        liveFestival = nearestFestival;
         liveConcert = nearestConcert;
         liveSport = nearestSport;
+        liveGame = nearestGame;
+        liveParty = nearestParty;
         
         if (appDone) {
             computeCards();

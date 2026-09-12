@@ -58,10 +58,10 @@ jobs:
       - name: Fetch Toronto events
         env:
           # Concerts + sports schedules. If unset, those two sources skip
-          # cleanly and the rest of the run is unaffected.
+          # cleanly; Eventbrite and City data still run.
           TICKETMASTER_API_KEY: ${{ secrets.TICKETMASTER_API_KEY }}
         run: |
-          npm install
+          npm ci
           node fetch_events.js
 
       # The deploy still runs daily for events; the scraper normally contacts

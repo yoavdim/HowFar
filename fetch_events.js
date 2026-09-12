@@ -8,15 +8,21 @@ const fetch = require('node-fetch');
 const OUT_FILE = 'toronto_events.json';
 
 const NPS_URL = "https://www.toronto.ca/services-payments/venues-facilities-bookings/booking-city-facilities/city-squares/nathan-phillips-square/events-happening-on-nathan-phillips-square/";
-const CKAN_URL = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/package_show?id=festivals-events";
+const EVENTBRITE_ROOT = "https://www.eventbrite.ca/d/canada--toronto";
+const EVENTBRITE_ROUTES = {
+    festivals: ["festivals"],
+    games: ["board-games", "blood-on-the-clocktower", "tabletop-games", "dungeons-and-dragons"],
+    parties: ["parties", "raves", "dance-party"],
+};
+const EVENTBRITE_SPACING_MS = 1000;
+const EVENTBRITE_UA = 'HowFar-Toronto/1.0 (+https://github.com/yoavdim/HowFar)';
+const EVENTBRITE_EVENT_HOSTS = new Set(['www.eventbrite.ca', 'www.eventbrite.com', 'www.eventbrite.co.uk']);
+const BROWSER_UA = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:155.0) Gecko/20100101 Firefox/155.0';
 
-// The festivals-events dataset's underlying feed (secure.toronto.ca) has been
-// Akamai-blocked (403) since ~2026-06-14, and the CKAN-hosted "backup" resource
-// just serves a stale cached copy of that same error page. Every URL the
-// dataset publishes leads to the same dead host — confirmed 2026-09-01.
-// Disabled here rather than removed so it's a one-line flip if Toronto ever
-// fixes it; no need to re-derive any of the parsing logic below.
-const FESTIVALS_ENABLED = false;
+const TORONTO_EVENTS_ROOT = 'https://secure.toronto.ca/c3api_data/v2/DataAccess.svc/festivals_events/events';
+const TORONTO_EVENTS_PAGE = 'https://www.toronto.ca/explore-enjoy/festivals-events/festivals-events-calendar/';
+const TORONTO_EVENT_CATEGORIES = ['Parade', 'Street Festival'];
+const TORONTO_WINDOW_DAYS = 61;
 
 const MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
 
@@ -62,6 +68,9 @@ const MAJOR_VENUE_IDS = {
     "KovZpZAJt7FA": "Coca-Cola Coliseum",  // ~8k
 };
 
+const PARTY_TITLE_PATTERN = /\b(?:rave|after[ -]?party|dance party|emo night|club night|white party|boat party|rooftop party|day party|4am license|guaranteed entry|\d{2,4}'?s party)\b/i;
+const PARTY_VENUES = new Set(['cabana pool bar', 'coda', 'dprtmnt', 'noir (inside rebel)']);
+
 // Pinned for the same reason: keyword search also returns "Toronto Blue Jays
 // (SS)" (spring training), "Toronto Maple Leafs Alumni", fan fests and
 // "OLG Play Stage Presents ..." entries.
@@ -95,13 +104,11 @@ function tmGate() {
 
 async function tmGet(path, params, { retryOn429 = true } = {}) {
     await tmGate();
-
     const qs = new URLSearchParams({ ...params, apikey: TM_KEY });
     const res = await fetch(`${TM_ROOT}${path}?${qs}`, {
         headers: { 'User-Agent': 'HowFar-DataFetcher/1.0 (GitHub Actions)' },
         timeout: 20000,
     });
-
     if (res.status === 429 && retryOn429) {
         console.warn(`  rate limited on ${path}, backing off 2s`);
         await sleep(2000);
@@ -123,7 +130,26 @@ function tmWindow() {
     return { startDateTime: fmt(now), endDateTime: fmt(end) };
 }
 
-// Flattens a Discovery API event into just what the cards need.
+// Arena/stadium bookings are always concerts, however the night is titled.
+function isTicketmasterParty(event) {
+    if (event.isMajorVenue) return false;
+    return event._ticketmasterParty || PARTY_TITLE_PATTERN.test(event.name || '')
+        || PARTY_VENUES.has(String(event.venueName || '').trim().toLowerCase());
+}
+
+function normalizeTimedEvent(e) {
+    return {
+        id: e.id, eventType: e.eventType, name: e.name, venueName: e.venueName,
+        lat: e.lat, lon: e.lon,
+        localDate: e.localDate, endLocalDate: e.endLocalDate || e.localDate,
+        startUtc: e.startUtc || null, endUtc: e.endUtc || null,
+        timeTBA: Boolean(e.timeTBA), timeZone: e.timeZone || null,
+        url: e.url || null, source: e.source,
+        isMajorVenue: Boolean(e.isMajorVenue), team: e.team || null,
+    };
+}
+
+// Flattens a Discovery API event into the common timed-event schema.
 function mapEvent(ev, extra = {}) {
     const venue = ev._embedded?.venues?.[0];
     const lat = parseFloat(venue?.location?.latitude);
@@ -131,22 +157,28 @@ function mapEvent(ev, extra = {}) {
     if (!isFinite(lat) || !isFinite(lon)) return null;
 
     const start = ev.dates?.start || {};
+    const end = ev.dates?.end || {};
     // dateTime is absolute UTC and is absent when the time is TBA.
     const startUtc = start.dateTime || null;
+    const endUtc = end.dateTime || null;
     const timeTBA = Boolean(start.timeTBA || start.noSpecificTime || !startUtc);
     if (!start.localDate) return null;
 
-    return {
+    return normalizeTimedEvent({
         id: ev.id,
         name: ev.name,
         venueName: venue?.name || "Venue TBA",
         lat, lon,
         localDate: start.localDate,
+        endLocalDate: end.localDate || start.localDate,
         startUtc,
+        endUtc,
         timeTBA,
+        timeZone: venue?.timezone || null,
         url: ev.url || null,
+        source: 'ticketmaster',
         ...extra,
-    };
+    });
 }
 
 function dedupeById(events) {
@@ -155,12 +187,256 @@ function dedupeById(events) {
     return [...seen.values()];
 }
 
+function dedupeBy(events, keyOf) {
+    const seen = new Map();
+    for (const event of events || []) {
+        const key = event && keyOf(event);
+        const existing = seen.get(key);
+        if (event && (!existing || (!existing.endUtc && event.endUtc))) seen.set(key, event);
+    }
+    return [...seen.values()];
+}
+
+const byId = e => e.id;
+const byName = e => `${e.name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}|${e.localDate}`;
+const byNameAndVenue = e => `${byName(e)}|${e.venueName.toLowerCase()}`;
+const dateThenName = (a, b) => a.localDate.localeCompare(b.localDate) || a.name.localeCompare(b.name);
+const byStart = (a, b) => (a.startUtc || a.localDate).localeCompare(b.startUtc || b.localDate);
+
+// --- Eventbrite (festivals + community games + parties) -------------------
+let eventbriteChain = Promise.resolve();
+function eventbriteGate() {
+    const turn = eventbriteChain.then(() => sleep(EVENTBRITE_SPACING_MS));
+    eventbriteChain = turn.catch(() => {});
+    return turn;
+}
+const torontoDateString = () =>
+    new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Toronto' }).format(new Date());
+
+function distanceFromTorontoKm(lat, lon) {
+    const rad = deg => deg * Math.PI / 180;
+    const [lat1, lat2] = [rad(43.6532), rad(lat)];
+    const a = Math.sin((lat2 - lat1) / 2) ** 2
+        + Math.cos(lat1) * Math.cos(lat2) * Math.sin(rad(lon + 79.3832) / 2) ** 2;
+    return 6371 * 2 * Math.asin(Math.sqrt(a));
+}
+
+function zonedDateTimeToUtc(date, time, timeZone) {
+    const wanted = Date.parse(`${date}T${time}:00Z`);
+    if (!Number.isFinite(wanted) || !timeZone) return null;
+    try {
+        const format = new Intl.DateTimeFormat('sv-SE', {
+            timeZone, dateStyle: 'short', timeStyle: 'short',
+        }).format;
+        let instant = wanted;
+        for (let pass = 0; pass < 2; pass++) {
+            instant += wanted - Date.parse(`${format(instant).replace(' ', 'T')}Z`);
+        }
+        return new Date(instant).toISOString();
+    } catch (_) {
+        return null;
+    }
+}
+
+function eventbriteTimings(html) {
+    let results;
+    try {
+        const marker = 'window.__SERVER_DATA__ = ';
+        const start = html.indexOf(marker);
+        const json = html.slice(start + marker.length, html.indexOf(';\n', start));
+        results = JSON.parse(json)?.search_data?.events?.results;
+    } catch (_) { /* shape changed — caller falls back to cache */ }
+    if (!Array.isArray(results)) return new Map();
+
+    const timings = new Map();
+    for (const event of results) {
+        const timeZone = event?.timezone || 'America/Toronto';
+        const startUtc = zonedDateTimeToUtc(event?.start_date, event?.start_time, timeZone);
+        const endUtc = zonedDateTimeToUtc(event?.end_date, event?.end_time, timeZone);
+        const id = String(event?.eventbrite_event_id || '');
+        if (!id || !startUtc || !endUtc || endUtc <= startUtc) continue;
+        timings.set(id, {
+            localDate: event.start_date, endLocalDate: event.end_date, startUtc, endUtc, timeZone,
+        });
+    }
+    return timings;
+}
+
+const EVENTBRITE_MATCHERS = {
+    festivals: {
+        titleOnly: true,
+        reject: /\b(after[ -]?party|rooftop party)\b/i,
+        accept: /\b(festival|fest|fair|festa|oktoberfest|fashion week|street party)\b/i,
+    },
+    games: {
+        reject: /\btrivia\b/i,
+        accept: /\b(board games?|game night|tabletop|blood on the clocktower|botc|ttrpg|rpg|role[ -]?playing|mahjong|mahj|scattergories|dice throne|speed puzzle|video game show|dungeons?\s*(?:&|and)\s*dragons?|d\s*&\s*d|one[ -]?shot|blades in the dark)\b/i,
+    },
+    parties: {
+        accept: /\b(party|rave|club|frosh|nightlife|after dark|day jam|blocko|dance|dj|boat cruise)\b/i,
+    },
+};
+
+function matchesEventbriteCategory(kind, item) {
+    const { titleOnly, reject, accept } = EVENTBRITE_MATCHERS[kind] || {};
+    if (!accept) return false;
+    const name = String(item.name || '');
+    const subject = titleOnly ? name : `${name} ${item.description || ''}`.replace(/\s+/g, ' ');
+    return !reject?.test(subject) && accept.test(subject);
+}
+
+function parseEventbritePage(html, kind, route) {
+    const blocks = [];
+    for (const match of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+        try { blocks.push(JSON.parse(match[1])); } catch (_) { /* unrelated JSON-LD */ }
+    }
+    const list = blocks.find(block => Array.isArray(block?.itemListElement)
+        && block.itemListElement.some(entry => entry?.item?.startDate));
+    if (!list) throw new Error(`${route}: event JSON-LD list not found`);
+    const timings = eventbriteTimings(html);
+    if (!timings.size) throw new Error(`${route}: event timing data not found`);
+
+    const today = torontoDateString();
+    const events = [];
+    for (const { item } of list.itemListElement) {
+        if (!item?.name || !matchesEventbriteCategory(kind, item)) continue;
+        // Absent attendance mode means in person; online events have no distance.
+        if (item.eventAttendanceMode
+            && !String(item.eventAttendanceMode).endsWith('/OfflineEventAttendanceMode')) continue;
+
+        const url = String(item.url || '').split('?')[0];
+        const [, host, id] = url.match(/^https:\/\/([^/]+)\/.*-tickets-(\d+)\/?$/) || [];
+        const timing = timings.get(id);
+        if (!timing || timing.endLocalDate < today || !EVENTBRITE_EVENT_HOSTS.has(host)) continue;
+
+        const location = item.location || {};
+        const lat = Number(location.geo?.latitude);
+        const lon = Number(location.geo?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)
+            || distanceFromTorontoKm(lat, lon) > Number(TORONTO_RADIUS_KM)) continue;
+
+        events.push(normalizeTimedEvent({
+            ...timing,
+            id: `eventbrite-${id}`,
+            eventType: kind === 'festivals' ? 'festival' : kind,
+            name: String(item.name).trim(),
+            venueName: String(location.name || location.address?.addressLocality || 'Venue TBA').trim(),
+            lat, lon,
+            timeTBA: false,
+            url,
+            source: 'eventbrite',
+        }));
+    }
+    return events;
+}
+
+async function fetchEventbriteCategory(kind) {
+    const collected = [];
+    let succeeded = 0;
+
+    for (const route of EVENTBRITE_ROUTES[kind]) {
+        try {
+            await eventbriteGate();
+            const res = await fetch(`${EVENTBRITE_ROOT}/${route}/`, {
+                headers: { 'User-Agent': EVENTBRITE_UA, Accept: 'text/html', 'Accept-Language': 'en-CA,en;q=0.9' },
+                timeout: 25000,
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const events = parseEventbritePage(await res.text(), kind, route);
+            succeeded++;
+            collected.push(...events);
+            console.log(`  Eventbrite ${route}: ${events.length} matching events`);
+        } catch (e) {
+            console.warn(`  Eventbrite ${route} fetch failed: ${e.message}`);
+        }
+    }
+
+    if (!succeeded) return null;
+    const events = dedupeBy(collected, byId).sort(dateThenName);
+    console.log(`Eventbrite ${kind}: ${events.length} unique events`);
+    return events;
+}
+
+// --- City of Toronto festivals calendar -----------------------------------
+function torontoPlace(event) {
+    for (const location of event.event_locations || []) {
+        let points = [];
+        try {
+            points = JSON.parse(location.location_gps || '[]')
+                .map(p => [Number(p.gps_lat), Number(p.gps_lng)])
+                .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+        } catch (_) { /* malformed — try the next location */ }
+        if (!points.length) continue;
+        return {
+            venueName: String(location.location_name || location.location_address || 'Venue TBA').trim(),
+            lat: points.reduce((sum, p) => sum + p[0], 0) / points.length,
+            lon: points.reduce((sum, p) => sum + p[1], 0) / points.length,
+        };
+    }
+    return null;
+}
+
+async function fetchTorontoFestivals() {
+    const zone = 'America/Toronto';
+    try {
+        const from = torontoDateString();
+        const until = new Date(`${from}T12:00:00Z`);
+        until.setUTCDate(until.getUTCDate() + TORONTO_WINDOW_DAYS);
+        const anyOf = (values, clause) => values.map(clause).join(' or ');
+        const filter = `calendar_date ge ${zonedDateTimeToUtc(from, '00:00', zone)}`
+            + ` and calendar_date lt ${zonedDateTimeToUtc(until.toISOString().slice(0, 10), '00:00', zone)}`
+            + ` and (${anyOf(TORONTO_EVENT_CATEGORIES, c => `event_category/any(i:i eq '${c}')`)})`;
+        const query = '$format=application/json;odata.metadata=none&$top=5000'
+            + '&$select=id,short_name,event_locations,event_startdate,event_enddate,event_expirydate,event_website,ticket_website'
+            + `&$filter=${encodeURIComponent(filter).replace(/'/g, '%27').replace(/%3A/g, ':')}`;
+
+        const res = await fetch(`${TORONTO_EVENTS_ROOT}?${query}`, {
+            headers: { 'User-Agent': BROWSER_UA }, timeout: 25000,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        if (!Array.isArray(body?.value)) throw new Error('event list missing');
+
+        const collected = [];
+        for (const event of body.value) {
+            const place = torontoPlace(event);
+            const name = String(event.short_name || '').trim();
+            const startMs = Date.parse(event.event_startdate);
+            const endValue = event.event_expirydate || event.event_enddate;
+            const endMs = Date.parse(endValue);
+            if (!event.id || !name || !place || !Number.isFinite(startMs)) continue;
+            if (distanceFromTorontoKm(place.lat, place.lon) > Number(TORONTO_RADIUS_KM)) continue;
+
+            collected.push(normalizeTimedEvent({
+                ...place,
+                id: `toronto-${event.id}`,
+                eventType: 'festival',
+                name,
+                localDate: String(event.event_startdate).slice(0, 10),
+                endLocalDate: String(endValue || event.event_startdate).slice(0, 10),
+                startUtc: new Date(startMs).toISOString(),
+                endUtc: endMs > startMs ? new Date(endMs).toISOString() : null,
+                timeZone: zone,
+                url: [event.event_website, event.ticket_website]
+                    .find(link => /^https?:\/\//i.test(link || '')) || TORONTO_EVENTS_PAGE,
+                source: 'toronto',
+            }));
+        }
+
+        const events = dedupeBy(collected, byName).sort(dateThenName);
+        console.log(`Toronto festivals: ${events.length} unique events`);
+        return events;
+    } catch (e) {
+        console.warn(`Toronto festivals fetch failed: ${e.message}`);
+        return null;
+    }
+}
+
 async function fetchConcerts() {
     if (!TM_KEY) {
         console.log("Concerts skipped: TICKETMASTER_API_KEY not set.");
         return null;
     }
-
     try {
         const window = tmWindow();
         const base = {
@@ -169,7 +445,6 @@ async function fetchConcerts() {
             sort: "date,asc",
             size: "200",
         };
-
         const collected = [];
 
         // Tier A: query each arena directly. Done separately rather than
@@ -180,7 +455,7 @@ async function fetchConcerts() {
             const events = body?._embedded?.events ?? [];
             console.log(`  ${venueLabel} (${venueId}): ${events.length} events`);
             for (const ev of events) {
-                const mapped = mapEvent(ev, { isMajorVenue: true });
+                const mapped = mapEvent(ev, { eventType: 'concert', isMajorVenue: true });
                 if (mapped) collected.push(mapped);
             }
         }
@@ -200,14 +475,19 @@ async function fetchConcerts() {
         const majorIds = new Set(Object.keys(MAJOR_VENUE_IDS));
         for (const ev of cityEvents) {
             const mapped = mapEvent(ev, {
+                eventType: 'concert',
                 isMajorVenue: majorIds.has(ev._embedded?.venues?.[0]?.id),
             });
-            if (mapped) collected.push(mapped);
+            if (mapped) {
+                const genre = ev.classifications?.[0]?.genre?.name;
+                mapped._ticketmasterParty = mapped.venueName.trim().toLowerCase() === 'rebel'
+                    && genre === 'Dance/Electronic';
+                collected.push(mapped);
+            }
         }
 
         const concerts = dedupeById(collected).sort((a, b) =>
             (a.startUtc || a.localDate).localeCompare(b.startUtc || b.localDate));
-
         console.log(`Concerts: ${concerts.length} unique events`);
         return concerts;
     } catch (e) {
@@ -221,7 +501,6 @@ async function fetchSports() {
         console.log("Sports skipped: TICKETMASTER_API_KEY not set.");
         return null;
     }
-
     try {
         const window = tmWindow();
         const collected = [];
@@ -242,14 +521,13 @@ async function fetchSports() {
             const events = body?._embedded?.events ?? [];
             console.log(`  ${team.name}: ${events.length} home events`);
             for (const ev of events) {
-                const mapped = mapEvent(ev, { team: team.key });
+                const mapped = mapEvent(ev, { eventType: 'sports', team: team.key });
                 if (mapped) collected.push(mapped);
             }
         }
 
         const sports = dedupeById(collected).sort((a, b) =>
             (a.startUtc || a.localDate).localeCompare(b.startUtc || b.localDate));
-
         console.log(`Sports: ${sports.length} unique home games`);
         return sports;
     } catch (e) {
@@ -260,7 +538,6 @@ async function fetchSports() {
 
 async function fetchNpsEvents() {
     const events = [];
-
     try {
         console.log("Fetching NPS events page...");
         const res = await fetch(NPS_URL, {
@@ -273,7 +550,6 @@ async function fetchNpsEvents() {
             return null;
         }
         const html = await res.text();
-
         const thisYear = new Date().getFullYear();
 
         // Matches every date-prefix format actually seen on the page:
@@ -322,122 +598,12 @@ async function fetchNpsEvents() {
             console.warn("NPS page fetched but no events matched — markup may have changed");
             return null;
         }
-
         console.log(`NPS: found ${events.length} events`);
     } catch (e) {
         console.warn("NPS fetch failed:", e.message);
         return null;
     }
-
     return events;
-}
-
-async function fetchCkanFestivals() {
-    if (!FESTIVALS_ENABLED) {
-        console.log("Festivals source disabled (see FESTIVALS_ENABLED) — skipping fetch.");
-        return null;
-    }
-
-    try {
-        console.log("Fetching CKAN festivals-events metadata...");
-        const res = await fetch(CKAN_URL, {
-            headers: { 'User-Agent': 'HowFar-DataFetcher/1.0 (GitHub Actions)' },
-            timeout: 15000
-        });
-        if (!res.ok) {
-            console.warn(`CKAN returned ${res.status}`);
-            return null;
-        }
-        const body = await res.json();
-        if (!body.success) return null;
-
-        const jsonResource = body.result.resources.find(
-            (r) => (r.format || '').toLowerCase() === 'json' || r.datastore_active
-        );
-        if (!jsonResource) return null;
-
-        let eventsUrl = jsonResource.url;
-        if (eventsUrl.includes('$top=')) {
-            eventsUrl += "&$orderby=event_startdate%20desc";
-        }
-
-        console.log("Fetching actual event records...");
-        const evRes = await fetch(eventsUrl, {
-            headers: { 'User-Agent': 'HowFar-DataFetcher/1.0 (GitHub Actions)' },
-            timeout: 15000
-        });
-        if (!evRes.ok) {
-            console.warn(`Events API returned ${evRes.status}`);
-            return null;
-        }
-
-        const rawEvents = await evRes.json();
-        const events = Array.isArray(rawEvents) ? rawEvents : (rawEvents.value || []);
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const festivals = [];
-
-        for (const item of events) {
-            try {
-                const startStr = item.event_startdate || item.calEvent?.startDate || item.startDate;
-                const endStr = item.event_enddate || item.calEvent?.endDate || item.endDate;
-                if (!startStr) continue;
-
-                const start = new Date(startStr);
-                let end = start;
-                if (endStr && endStr.trim() !== "" && endStr !== "null") {
-                    const parsedEnd = new Date(endStr);
-                    if (!isNaN(parsedEnd)) end = parsedEnd;
-                }
-                if (isNaN(start)) continue;
-
-                const endDay = new Date(end); endDay.setHours(0, 0, 0, 0);
-                if (endDay < today) continue; // skip past events
-
-                const name = item.event_name || item.calEvent?.eventName || item.eventName || "Live Event";
-                let locations = item.event_locations || item.calEvent?.locations || item.locations || [];
-                if (typeof locations === 'string') {
-                    try { locations = JSON.parse(locations); } catch (e) { locations = []; }
-                }
-                if (!Array.isArray(locations)) locations = [locations];
-
-                for (const loc of locations) {
-                    if (!loc) continue;
-                    let lat, lon;
-                    if (loc.location_gps) {
-                        try {
-                            const gpsArr = typeof loc.location_gps === 'string' ? JSON.parse(loc.location_gps) : loc.location_gps;
-                            if (gpsArr && gpsArr.length > 0) {
-                                lat = gpsArr[0].gps_lat;
-                                lon = gpsArr[0].gps_lng;
-                            }
-                        } catch (e) {}
-                    }
-                    if (!lat) lat = loc.coords?.lat ?? loc.geo?.latitude ?? loc.latitude;
-                    if (!lon) lon = loc.coords?.lng ?? loc.coords?.lon ?? loc.geo?.longitude ?? loc.longitude;
-                    if (lat && lon) {
-                        festivals.push({
-                            name,
-                            lat: parseFloat(lat),
-                            lon: parseFloat(lon),
-                            start: start.toISOString().split('T')[0],
-                            end: new Date(end.getTime() + 12 * 3600000).toISOString().split('T')[0]
-                        });
-                        break; // one location per event is enough
-                    }
-                }
-            } catch (e) {
-                // skip bad record
-            }
-        }
-
-        console.log(`CKAN: found ${festivals.length} festivals`);
-        return festivals.length > 0 ? festivals : null;
-    } catch (e) {
-        console.warn("CKAN festivals fetch failed:", e.message);
-        return null;
-    }
 }
 
 async function fetchSkating() {
@@ -449,7 +615,6 @@ async function fetchSkating() {
             return null;
         }
         const locBody = await locRes.json();
-        
         const locMap = {};
         for (const feature of locBody.features || []) {
             const locId = feature.attributes.locationid;
@@ -485,7 +650,7 @@ async function fetchSkating() {
             console.warn("Drop-in schedules were not an array");
             return null;
         }
-        
+
         const todayStr = new Date().toISOString().split('T')[0];
         const todayDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
         const activeSkating = [];
@@ -510,7 +675,7 @@ async function fetchSkating() {
                 }
             }
         }
-        
+
         // Genuinely empty is plausible here (summer, no ice), so an empty list
         // is a valid result rather than a failure.
         console.log(`Skating: found ${activeSkating.length} drop-in sessions upcoming`);
@@ -573,21 +738,60 @@ async function main() {
 
     const previous = readPrevious();
 
-    const [npsData, ckanFestivals, skatingData, concertsData, sportsData] = await Promise.all([
+    const [npsData, eventbriteFestivals, torontoFestivals, gamesData, partiesData, skatingData, concertsData, sportsData] = await Promise.all([
         fetchNpsEvents(),
-        fetchCkanFestivals(),
+        fetchEventbriteCategory('festivals'),
+        fetchTorontoFestivals(),
+        fetchEventbriteCategory('games'),
+        fetchEventbriteCategory('parties'),
         fetchSkating(),
         fetchConcerts(),
         fetchSports()
     ]);
 
+    const carried = (key, source) => (previous[key] || []).filter(event => event.source === source);
+    const cachedTicketmasterParties = carried('parties', 'ticketmaster');
+    const festivalPrevious = { ...previous, festivals: [
+        ...carried('festivals', 'toronto'), ...carried('festivals', 'eventbrite'),
+    ] };
+    const partiesPrevious = { ...previous, parties: carried('parties', 'eventbrite') };
+    const festivalData = (torontoFestivals || eventbriteFestivals) && dedupeBy([
+        ...(torontoFestivals || carried('festivals', 'toronto')),
+        ...(eventbriteFestivals || carried('festivals', 'eventbrite')),
+    ], byName).sort(dateThenName);
+
     const now = new Date().toISOString();
     const degraded = [];
     const nps = pick('npSquare', 'NP Square events', npsData, previous, now, degraded);
-    const fest = pick('festivals', 'Festivals', ckanFestivals, previous, now, degraded, { disabled: !FESTIVALS_ENABLED });
+    const fest = pick('festivals', 'Festival sources', festivalData, festivalPrevious, now, degraded);
+    const games = pick('games', 'Eventbrite games', gamesData, previous, now, degraded);
+    const parties = pick('parties', 'Eventbrite parties', partiesData, partiesPrevious, now, degraded);
     const skate = pick('skating', 'Drop-in skating', skatingData, previous, now, degraded);
     const concerts = pick('concerts', 'Concerts', concertsData, previous, now, degraded, { disabled: !TM_KEY });
     const sports = pick('sports', 'Sports', sportsData, previous, now, degraded, { disabled: !TM_KEY });
+    if (festivalData !== null && (torontoFestivals === null || eventbriteFestivals === null)) {
+        fest.meta.stale = true;
+        fest.meta.carriedFetched = previous.sources?.festivals?.fetched || previous.lastUpdated || null;
+        degraded.push(torontoFestivals === null ? 'Toronto festivals' : 'Eventbrite festivals');
+    }
+    if (concertsData === null && cachedTicketmasterParties.length) {
+        parties.meta.stale = true;
+        parties.meta.ticketmasterFetched = previous.sources?.concerts?.fetched || previous.lastUpdated || null;
+    }
+
+    const retag = (events, eventType) => events.map(event =>
+        normalizeTimedEvent({ ...event, eventType, source: event.source || 'ticketmaster' }));
+    const moved = retag(concerts.value.filter(isTicketmasterParty), 'parties');
+    concerts.value = retag(concerts.value.filter(event => !isTicketmasterParty(event)), 'concert');
+
+    const today = torontoDateString();
+    parties.value = dedupeBy([
+        ...retag(parties.value, 'parties'),
+        ...moved,
+        ...(concertsData === null ? retag(cachedTicketmasterParties, 'parties') : []),
+    ], byNameAndVenue).filter(event => (event.endLocalDate || event.localDate) >= today).sort(byStart);
+    sports.value = retag(sports.value, 'sports');
+    if (moved.length) console.log(`Club nights moved to parties: ${moved.map(e => e.name).join('; ')}`);
 
     const output = {
         lastUpdated: now,
@@ -596,12 +800,16 @@ async function main() {
         sources: {
             npSquare: nps.meta,
             festivals: fest.meta,
+            games: games.meta,
+            parties: parties.meta,
             skating: skate.meta,
             concerts: concerts.meta,
             sports: sports.meta
         },
         npSquare: nps.value,
         festivals: fest.value,
+        games: games.value,
+        parties: parties.value,
         skating: skate.value,
         concerts: concerts.value,
         sports: sports.value
@@ -609,7 +817,8 @@ async function main() {
 
     fs.writeFileSync(OUT_FILE, JSON.stringify(output, null, 0));
     console.log(`Wrote ${OUT_FILE} (NPS: ${nps.value.length}, festivals: ${fest.value.length}, ` +
-        `skating: ${skate.value.length}, concerts: ${concerts.value.length}, sports: ${sports.value.length})`);
+        `games: ${games.value.length}, parties: ${parties.value.length}, skating: ${skate.value.length}, ` +
+        `concerts: ${concerts.value.length}, sports: ${sports.value.length})`);
 
     if (degraded.length > 0) {
         console.log(`::warning title=Degraded event data::${degraded.length} source(s) failed: ${degraded.join(', ')}`);
@@ -632,11 +841,13 @@ main().catch(e => {
     fs.writeFileSync(OUT_FILE, JSON.stringify({
         lastUpdated: new Date().toISOString(),
         sources: {
-            npSquare: empty, festivals: empty, skating: empty,
-            concerts: empty, sports: empty
+            npSquare: empty, festivals: empty, games: empty, parties: empty,
+            skating: empty, concerts: empty, sports: empty
         },
         npSquare: [],
         festivals: [],
+        games: [],
+        parties: [],
         skating: [],
         concerts: [],
         sports: []
