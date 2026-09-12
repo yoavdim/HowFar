@@ -312,6 +312,31 @@ body {
     font-weight: 600;
 }
 
+.source-links-label {
+    margin-bottom: 0.55rem;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.source-link-icons {
+    display: flex;
+    gap: 0.55rem;
+}
+
+.source-link-icons a {
+    width: 2rem;
+    height: 2rem;
+    overflow: hidden;
+    border-radius: 0.45rem;
+    background: rgba(255, 255, 255, 0.28);
+    display: grid;
+    place-items: center;
+}
+
+.source-link-icons a:hover {
+    background: rgba(255, 255, 255, 0.42);
+}
+
 .menu-item {
     display: flex;
     align-items: center;
