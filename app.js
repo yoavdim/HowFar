@@ -1253,7 +1253,7 @@ function alternativesHtml(config, item) {
                 : `https://www.google.com/maps/dir/?api=1&destination=${alt.origLat},${alt.origLon}&travelmode=walking`;
         const externalUrl = alt.externalUrl || alt.ticketUrl;
         const externalLink = externalUrl
-            ? `<a href="${externalUrl}" ${targetAttr} class="alt-ticket" aria-label="${alt.ticketUrl ? 'Tickets' : 'Venue page'}"
+            ? `<a href="${externalUrl}" ${targetAttr} class="alt-ticket" aria-label="${alt.ticketUrl ? 'Tickets' : 'Venue page'}" title="${externalUrl}"
                   onclick="event.stopPropagation();"><i class="fa-solid ${alt.ticketUrl ? 'fa-ticket' : 'fa-arrow-up-right-from-square'}"></i></a>`
             : '';
         return `

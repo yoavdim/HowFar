@@ -357,6 +357,86 @@ async function fetchEventbriteCategory(kind) {
     return events;
 }
 
+async function fetchYohomoParties(previous) {
+    try {
+        const res = await fetch('https://www.yohomo.ca/', {
+            headers: { 'User-Agent': 'HowFar-DataFetcher/1.0 (+https://github.com/yoavdim/HowFar)' }, timeout: 25000,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const text = value => String(value || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').trim();
+        const time = value => {
+            const match = text(value).toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/);
+            if (!match) return null;
+            let hour = Number(match[1]) % 12 + (match[3] === 'pm' ? 12 : 0);
+            return `${String(hour).padStart(2, '0')}:${match[2] || '00'}`;
+        };
+        const cached = new Map((previous.parties || [])
+            .filter(event => event.source === 'yohomo')
+            .map(event => [event.venueName.toLowerCase(), event]));
+        const places = new Map();
+        const events = [];
+        const rows = (await res.text()).split('<div role="listitem" class="event w-dyn-item">').slice(1);
+
+        for (const row of rows) {
+            if (!/fs-cmsfilter-field="category" class="text-invisible">Party<\/p>/.test(row)) continue;
+            const url = row.match(/<a href="([^"]+)"/i)?.[1];
+            const name = text(row.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i)?.[1]);
+            const location = row.match(/fs-cmsfilter-field="location-name"[^>]*>([^<]+)<\/p><p>([^<]+)<\/p>/i);
+            const date = row.match(/fs-cmssort-field="item" fs-cmssort-type="date" class="text-invisible">([A-Z][a-z]+) (\d{1,2}), (\d{4})<\/p>/);
+            const hours = row.match(/<div class="item-event-hours">[\s\S]*?<p[^>]*>([^<]+)<\/p>[\s\S]*?<p[^>]*>[^<]*<\/p>[\s\S]*?<p[^>]*>([^<]+)<\/p>/i);
+            if (!url || !name || !location || !date) continue;
+
+            const month = MONTHS[date[1].toLowerCase()];
+            const venueName = text(location[1]);
+            const address = text(location[2]);
+            if (!month || !venueName || address === 'Address TO BE ANNOUNCED') continue;
+            const localDate = `${date[3]}-${String(month).padStart(2, '0')}-${date[2].padStart(2, '0')}`;
+            const start = time(hours?.[1]);
+            const end = time(hours?.[2]);
+            const endDay = new Date(`${localDate}T12:00:00Z`);
+            if (start && end && end <= start) endDay.setUTCDate(endDay.getUTCDate() + 1);
+            const endLocalDate = endDay.toISOString().slice(0, 10);
+            const placeKey = venueName.toLowerCase();
+            let place = places.get(placeKey);
+            if (!place) {
+                const old = cached.get(placeKey);
+                if (old) place = { lat: old.lat, lon: old.lon };
+                else {
+                    await sleep(1000);
+                    const geo = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(`${venueName}, ${address}, Toronto, Ontario, Canada`)}`, {
+                        headers: { 'User-Agent': 'HowFar-DataFetcher/1.0 (+https://github.com/yoavdim/HowFar)' }, timeout: 25000,
+                    });
+                    if (geo.ok) {
+                        const result = (await geo.json())[0];
+                        if (Number.isFinite(Number(result?.lat)) && Number.isFinite(Number(result?.lon))) {
+                            place = { lat: Number(result.lat), lon: Number(result.lon) };
+                        }
+                    }
+                }
+                places.set(placeKey, place || null);
+            }
+            if (!place || distanceFromTorontoKm(place.lat, place.lon) > Number(TORONTO_RADIUS_KM)) continue;
+
+            events.push(normalizeTimedEvent({
+                id: `yohomo-${url.split('/').pop()}`,
+                eventType: 'parties', name, venueName, ...place,
+                localDate, endLocalDate,
+                startUtc: start ? zonedDateTimeToUtc(localDate, start, 'America/Toronto') : null,
+                endUtc: start && end ? zonedDateTimeToUtc(endLocalDate, end, 'America/Toronto') : null,
+                timeTBA: !start, timeZone: 'America/Toronto',
+                url: `https://www.yohomo.ca${url}`, source: 'yohomo',
+            }));
+        }
+        if (!events.length) throw new Error('no Party events with usable locations');
+        console.log(`Yohomo parties: ${events.length} events`);
+        return events;
+    } catch (e) {
+        console.warn(`Yohomo parties fetch failed: ${e.message}`);
+        return null;
+    }
+}
+
 // --- City of Toronto festivals calendar -----------------------------------
 function torontoPlace(event) {
     for (const location of event.event_locations || []) {
@@ -738,12 +818,13 @@ async function main() {
 
     const previous = readPrevious();
 
-    const [npsData, eventbriteFestivals, torontoFestivals, gamesData, partiesData, skatingData, concertsData, sportsData] = await Promise.all([
+    const [npsData, eventbriteFestivals, torontoFestivals, gamesData, eventbriteParties, yohomoParties, skatingData, concertsData, sportsData] = await Promise.all([
         fetchNpsEvents(),
         fetchEventbriteCategory('festivals'),
         fetchTorontoFestivals(),
         fetchEventbriteCategory('games'),
         fetchEventbriteCategory('parties'),
+        fetchYohomoParties(previous),
         fetchSkating(),
         fetchConcerts(),
         fetchSports()
@@ -754,7 +835,13 @@ async function main() {
     const festivalPrevious = { ...previous, festivals: [
         ...carried('festivals', 'toronto'), ...carried('festivals', 'eventbrite'),
     ] };
-    const partiesPrevious = { ...previous, parties: carried('parties', 'eventbrite') };
+    const partyData = (eventbriteParties || yohomoParties) && dedupeBy([
+        ...(eventbriteParties || carried('parties', 'eventbrite')),
+        ...(yohomoParties || carried('parties', 'yohomo')),
+    ], byNameAndVenue).sort(byStart);
+    const partiesPrevious = { ...previous, parties: [
+        ...carried('parties', 'eventbrite'), ...carried('parties', 'yohomo'),
+    ] };
     const festivalData = (torontoFestivals || eventbriteFestivals) && dedupeBy([
         ...(torontoFestivals || carried('festivals', 'toronto')),
         ...(eventbriteFestivals || carried('festivals', 'eventbrite')),
@@ -765,7 +852,7 @@ async function main() {
     const nps = pick('npSquare', 'NP Square events', npsData, previous, now, degraded);
     const fest = pick('festivals', 'Festival sources', festivalData, festivalPrevious, now, degraded);
     const games = pick('games', 'Eventbrite games', gamesData, previous, now, degraded);
-    const parties = pick('parties', 'Eventbrite parties', partiesData, partiesPrevious, now, degraded);
+    const parties = pick('parties', 'Party sources', partyData, partiesPrevious, now, degraded);
     const skate = pick('skating', 'Drop-in skating', skatingData, previous, now, degraded);
     const concerts = pick('concerts', 'Concerts', concertsData, previous, now, degraded, { disabled: !TM_KEY });
     const sports = pick('sports', 'Sports', sportsData, previous, now, degraded, { disabled: !TM_KEY });
@@ -773,6 +860,11 @@ async function main() {
         fest.meta.stale = true;
         fest.meta.carriedFetched = previous.sources?.festivals?.fetched || previous.lastUpdated || null;
         degraded.push(torontoFestivals === null ? 'Toronto festivals' : 'Eventbrite festivals');
+    }
+    if (partyData !== null && (eventbriteParties === null || yohomoParties === null)) {
+        parties.meta.stale = true;
+        parties.meta.carriedFetched = previous.sources?.parties?.fetched || previous.lastUpdated || null;
+        degraded.push(eventbriteParties === null ? 'Eventbrite parties' : 'Yohomo parties');
     }
     if (concertsData === null && cachedTicketmasterParties.length) {
         parties.meta.stale = true;
